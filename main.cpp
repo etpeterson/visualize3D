@@ -11,12 +11,15 @@
  5. Test the image undistortion
  
  To improve matching:
- 1. Need ply files of the MRI data
- 2. Initial pose with face detection
- 3. Find matching points simliar to model registration by finding locations on the 3D data of the image markers from ORB detectors
+ 1. Initial pose with face detection
+ 2. Find matching points simliar to model registration by finding locations on the 3D data of the image markers from ORB detectors
     a. Use a single image to find matches but later use video and filtering to find the best matches
- 4. Find the pose using matched points rather than face detection
+ 3. Find the pose using matched points rather than face detection
     a. Could compare to the pose from face detection?
+ 
+ 
+ 
+ I created the ply file with surfaces in paraview
  
  
  OPENCV 2D/3D pose with a mesh!
@@ -149,6 +152,11 @@ protected:
 
 
     
+    //feature detection
+    cv::ORB orbmatch{100}; //only use the 100 best features
+    std::vector<cv::KeyPoint> kp;
+    cv::Mat desc;
+    
     //camera section
     cv::Mat cameraMatrix;
     cv::Mat distCoeffs;
@@ -181,7 +189,7 @@ public:
     void undistort_frame(cv::Mat &frame); //undistort the output image
     void setup_calibration(int caltype); //set the variables correctly for calibrating with either a face or a chessboard
     void detect_keypoints(cv::Mat frame);
-    void render_detected(cv::Mat frame);
+    void render_detected(cv::Mat &frame);
     
     
     vis3D();
@@ -687,13 +695,19 @@ void vis3D::detect_keypoints(cv::Mat frame)
     //detect the keypoints using an ORB detector
     //also need to find where they are on the object!
     //probably some filtering too
+    
+    cvtColor( frame, frame, CV_BGR2GRAY );
+    orbmatch.detect(frame, kp);
+    //orbmatch.compute(frame, kp, desc);
+    //orbmatch.(frame,cv::Mat::ones(frame.size(),CV_8U)),kp,desc);
 }
 
 
 
-void render_detected(cv::Mat frame)
+void vis3D::render_detected(cv::Mat &frame)
 {
     //render the detected points and the head pose in some way
+    cv::drawKeypoints(frame, kp, frame);
 }
 
 
@@ -744,7 +758,12 @@ void help_on_screen(cv::Mat frame,int flags)
     }else{
         cv::putText(frame, "(u)ndistorting off", cv::Point2i(5,95),CV_FONT_HERSHEY_PLAIN, 1.0, CV_RGB(0,0,255));
     }
-    cv::putText(frame, "(c)alibrate", cv::Point2i(5,115),CV_FONT_HERSHEY_PLAIN, 1.0, CV_RGB(0,0,255));
+    if (flags&32) { //finding keypoints
+        cv::putText(frame, "(f)inding keypoints on", cv::Point2i(5,115),CV_FONT_HERSHEY_PLAIN, 1.0, CV_RGB(255,0,0));
+    }else{
+        cv::putText(frame, "(f)inding keypoints off", cv::Point2i(5,115),CV_FONT_HERSHEY_PLAIN, 1.0, CV_RGB(0,0,255));
+    }
+    cv::putText(frame, "(c)alibrate", cv::Point2i(5,135),CV_FONT_HERSHEY_PLAIN, 1.0, CV_RGB(0,0,255));
     //cv::putText(frame, point_names[i], image_points_cal[loc][i],CV_FONT_HERSHEY_PLAIN, 1.0, CV_RGB(0,255,0));
 }
 
@@ -913,6 +932,7 @@ int main(int argc, char* argv[])
                 std::cout<<"Recording for keypoint detection"<<std::endl;
                 isdetecting=1;
                 helpflags=helpflags^1<<5;
+                vis.setup_calibration(CALIBRATE_FACE); //a little setup so we don't do it a lot in other functions
             }else{ //turn point detection off
                 std::cout<<"Recording for keypoint detection"<<std::endl;
                 isdetecting=0;
@@ -942,8 +962,8 @@ int main(int argc, char* argv[])
             //detect keypoints on the image
             vis.detect_anatomy(frame, -1);
             vis.find_pose();
-            //vis.detect_keypoints(frame);
-            //vis.render_detected(frame);
+            vis.detect_keypoints(frame);
+            vis.render_detected(frame);
         }
         
         if (isundistorting==1) {
