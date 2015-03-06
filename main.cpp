@@ -37,6 +37,9 @@
  http://pointclouds.org/
  http://opencv.org/
  
+ OpenCV documentation about matching and features
+ http://docs.opencv.org/trunk/doc/py_tutorials/py_feature2d/py_table_of_contents_feature2d/py_table_of_contents_feature2d.html
+ 
  */
 
 
@@ -153,9 +156,13 @@ protected:
 
     
     //feature detection
-    cv::ORB orbmatch{100}; //only use the 100 best features
+    cv::ORB orbdet{5000,1.2f,8,11,0,2,cv::ORB::HARRIS_SCORE,11}; //only use the 100 best features
+    cv::SURF surfdet{400,4,2,true,true}; //don't bother with the orientation of the features
     std::vector<cv::KeyPoint> kp;
     cv::Mat desc;
+    
+    //background detector
+    cv::BackgroundSubtractorMOG2 mog2{180,50,true}; //(200,16,false)
     
     //camera section
     cv::Mat cameraMatrix;
@@ -696,10 +703,21 @@ void vis3D::detect_keypoints(cv::Mat frame)
     //also need to find where they are on the object!
     //probably some filtering too
     
-    cvtColor( frame, frame, CV_BGR2GRAY );
-    orbmatch.detect(frame, kp);
-    //orbmatch.compute(frame, kp, desc);
-    //orbmatch.(frame,cv::Mat::ones(frame.size(),CV_8U)),kp,desc);
+    cv::Mat mask, frame_tmp;
+    
+    cvtColor( frame, frame_tmp, CV_BGR2GRAY );
+    equalizeHist( frame_tmp, frame );
+    
+    //find the foreground
+    //mog2(frame,mask);
+    
+    //detect features (I think SURF is the best, actually. But FAST detects a LOT of points!)
+    //cv::FAST(frame, kp, 10,true);
+    //orbdet(frame,mask,kp,desc);
+    //orbdet.detect(frame, kp);
+    //orbdet.detect(frame, kp, mask);
+    surfdet.detect(frame, kp);
+    
 }
 
 
