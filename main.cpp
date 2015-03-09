@@ -769,7 +769,8 @@ void vis3D::match_keypoints()
 {
     //filter the keypoints and match them in time and to the object itself!
     //TODO: use a knn match to better filter the keypoints
-    for (int i=0; i<desc.size(); i++) { //this just matches, I probably should do some position and distance matching as well because not every keypoint is in every frame!
+    std::cout<<"Matching a total of "<<desc.size()<<" frames"<<std::endl;
+    for (int i=0; i<desc.size()-1; i++) { //this just matches, I probably should do some position and distance matching as well because not every keypoint is in every frame!
         surfmatch.push_back(std::vector<std::vector<cv::DMatch>>());
         for (int j=i+1; j<desc.size(); j++) {
             std::cout<<"matching frame "<<i<<" to frame "<<j<<std::endl;
@@ -777,6 +778,11 @@ void vis3D::match_keypoints()
             bfmatch.match(desc[i], desc[j], surfmatch[i][j-i-1]); //match points to previous image
         }
     }
+    /*std::cout<<surfmatch.size()<<" ";
+    for (int i=0; i<surfmatch.size(); i++) {
+        std::cout<<surfmatch[i].size()<<" ";
+    }
+    std::cout<<std::endl;*/
 }
 
 
