@@ -79,7 +79,7 @@ void bound_rect(cv::Rect &rect,cv::Point2i size); //downsize rects that exceed t
 
 
 
-bool rect_largest_to_smallest (cv::Rect i,cv::Rect j) { return (i.area()>j.area()); } //rect sorting helper function (largest to smallest)
+bool rect_largest_to_smallest (const cv::Rect i,const cv::Rect j) { return (i.area()>j.area()); } //rect sorting helper function (largest to smallest)
 
 
 
@@ -157,9 +157,13 @@ protected:
     
     //feature detection
     cv::ORB orbdet{5000,1.2f,8,11,0,2,cv::ORB::HARRIS_SCORE,11}; //only use the 100 best features
-    cv::SURF surfdet{400,4,2,true,true}; //don't bother with the orientation of the features
-    std::vector<cv::KeyPoint> kp;
-    cv::Mat desc;
+    cv::SURF surfdet{200,4,2,true,true}; //don't bother with the orientation of the features
+    //std::vector<cv::KeyPoint> kp;
+    std::vector<std::vector<cv::KeyPoint>> kp;
+    //cv::Mat desc;
+    std::vector<cv::Mat> desc;
+    cv::BFMatcher bfmatch{cv::NORM_L1,1}; //brute force matcher
+    cv::vector<cv::vector<cv::vector<cv::DMatch>>> surfmatch;
     
     //background detector
     cv::BackgroundSubtractorMOG2 mog2{180,50,true}; //(200,16,false)
@@ -187,16 +191,18 @@ public:
     void camera_calibration(cv::Point2i); //camera calibration helper function
     //void get_pose();
     void detect_anatomy(cv::Mat &, int); //detect anatomy using cascade detectors
-    void render_image_points_cal(cv::Mat,int); //draw image_points_cal on an image
-    void render_image_points(cv::Mat); //draw image_points on an image
-    void render_objects(cv::Mat,std::string); //draw all the detected objects on the given frame
+    void render_image_points_cal(cv::Mat &,int); //draw image_points_cal on an image
+    void render_image_points(cv::Mat &); //draw image_points on an image
+    void render_objects(cv::Mat &,std::string); //draw all the detected objects on the given frame
     void project_points(); //fill image_points with locations calculated from the rotation, translation, camera matrix, and the object points
     void find_pose(); //find the rotation and translation vectors based on the object and image points
     void detect_chessboard(cv::Mat &frame, int framenum); //detect the chessboard features
     void undistort_frame(cv::Mat &frame); //undistort the output image
     void setup_calibration(int caltype); //set the variables correctly for calibrating with either a face or a chessboard
-    void detect_keypoints(cv::Mat frame);
-    void render_detected(cv::Mat &frame);
+    void detect_keypoints(cv::Mat frame); //find the keypoints in the frame
+    void render_detected(cv::Mat &frame); //draw the detected points on the frame
+    void render_matched_detected(cv::Mat &frame); //draw the detected and matched points on the frames
+    void match_keypoints(); //filter the image keypoints and match them to the object
     
     
     vis3D();
@@ -396,6 +402,8 @@ void vis3D::camera_calibration(cv::Point2i framesize)  //should I pass by refere
     //and lets clear all the points we used so that we can recalibrate later
     volume_points_cal.clear();
     image_points_cal.clear();
+    rvecs_cal.clear();
+    tvecs_cal.clear();
 }
 
 void vis3D::setup_camera_matrix(cv::Point2i framesize) //should I pass by reference?
@@ -602,7 +610,7 @@ bool vis3D::run_cascade_detector(cv::CascadeClassifier classifier,cv::Mat &frame
 
 }
 
-void vis3D::render_image_points_cal(cv::Mat frame,int loc)
+void vis3D::render_image_points_cal(cv::Mat &frame,int loc)
 {
     for (int i=0; i<image_points_cal[loc].size(); i++) {
         cv::circle(frame, image_points_cal[loc][i], 2, cv::Scalar(0,255,0),-2);
@@ -610,7 +618,7 @@ void vis3D::render_image_points_cal(cv::Mat frame,int loc)
     }
 }
 
-void vis3D::render_image_points(cv::Mat frame)
+void vis3D::render_image_points(cv::Mat &frame)
 {
     for (int i=0; i<image_points.size(); i++) {
         cv::circle(frame, image_points[i], 2, cv::Scalar(0,255,0),-2);
@@ -619,7 +627,7 @@ void vis3D::render_image_points(cv::Mat frame)
 }
 
 
-void vis3D::render_objects(cv::Mat frame,std::string name)
+void vis3D::render_objects(cv::Mat &frame,const std::string name)
 {
     for (int i=0; i<objects.size(); i++) {
         if (i==0) {
@@ -644,7 +652,7 @@ void vis3D::find_pose()
     //std::cout<<"translation vector "<<std::endl<<tvecs<<std::endl;
 }
 
-void vis3D::detect_chessboard(cv::Mat &frame, int framenum)
+void vis3D::detect_chessboard(cv::Mat &frame,const int framenum)
 {
     bool found;
     std::vector<cv::Point2f> *pts; //assign it to the correct vector below!
@@ -708,15 +716,34 @@ void vis3D::detect_keypoints(cv::Mat frame)
     cvtColor( frame, frame_tmp, CV_BGR2GRAY );
     equalizeHist( frame_tmp, frame );
     
+    //allocate space in our keypoint and descriptor vectors
+    kp.push_back(std::vector<cv::KeyPoint>());
+    desc.push_back(cv::Mat());
+    
+    //save the pose (which was computed previously!)
+    rvecs_cal.push_back(rvecs);
+    tvecs_cal.push_back(tvecs);
+    
     //find the foreground
     //mog2(frame,mask);
     
     //detect features (I think SURF is the best, actually. But FAST detects a LOT of points!)
     //cv::FAST(frame, kp, 10,true);
-    //orbdet(frame,mask,kp,desc);
+    //orbdet(frame,mask,kp,desc); //ORB detects fairly well, but mostly around the edges of the head
     //orbdet.detect(frame, kp);
     //orbdet.detect(frame, kp, mask);
-    surfdet.detect(frame, kp);
+    //surfdet.detect(frame, kp);
+    //surfdet.compute(frame,kp,desc);
+    surfdet(frame,cv::Mat::ones(frame.size(),CV_8U),kp.back(),desc.back()); //detect points in current image
+    //std::cout<<kp.back()[0].pt<<" "<<kp.back()[0].response<<std::endl;
+    //std::cout<<desc.back().size()<<std::endl;
+    
+    //match the features to the previous frame (if any)
+    //if (desc.size()>1) {
+    //    surfmatch.push_back(std::vector<cv::DMatch>());
+    //    bfmatch.match(desc[desc.size()-1], desc.back(), surfmatch.back()); //match points to previous image
+    //}
+    
     
 }
 
@@ -725,7 +752,31 @@ void vis3D::detect_keypoints(cv::Mat frame)
 void vis3D::render_detected(cv::Mat &frame)
 {
     //render the detected points and the head pose in some way
-    cv::drawKeypoints(frame, kp, frame);
+    cv::drawKeypoints(frame, kp.back(), frame);
+}
+
+void vis3D::render_matched_detected(cv::Mat &frame) //not actually working
+{
+    cv::Mat frame_new;
+    //render the detected and matched keypoints from the current and previous frame
+    //if (surfmatch.size()>0) { //make sure we have at least 2 frames
+    //    cv::drawMatches(frame, kp[kp.size()-1], frame, kp.back(), surfmatch.back(), frame_new);
+    //}
+    
+}
+
+void vis3D::match_keypoints()
+{
+    //filter the keypoints and match them in time and to the object itself!
+    //TODO: use a knn match to better filter the keypoints
+    for (int i=0; i<desc.size(); i++) { //this just matches, I probably should do some position and distance matching as well because not every keypoint is in every frame!
+        surfmatch.push_back(std::vector<std::vector<cv::DMatch>>());
+        for (int j=i+1; j<desc.size(); j++) {
+            std::cout<<"matching frame "<<i<<" to frame "<<j<<std::endl;
+            surfmatch[i].push_back(std::vector<cv::DMatch>());
+            bfmatch.match(desc[i], desc[j], surfmatch[i][j-i-1]); //match points to previous image
+        }
+    }
 }
 
 
@@ -748,7 +799,7 @@ void bound_rect(cv::Rect &rect, cv::Point2i size)
     }
 }
 
-void help_on_screen(cv::Mat frame,int flags)
+void help_on_screen(cv::Mat frame,const int flags)
 {
     //std::cout<<"flags "<<flags<<std::endl;
     if (flags&1) { //this help
@@ -782,6 +833,7 @@ void help_on_screen(cv::Mat frame,int flags)
         cv::putText(frame, "(f)inding keypoints off", cv::Point2i(5,115),CV_FONT_HERSHEY_PLAIN, 1.0, CV_RGB(0,0,255));
     }
     cv::putText(frame, "(c)alibrate", cv::Point2i(5,135),CV_FONT_HERSHEY_PLAIN, 1.0, CV_RGB(0,0,255));
+    cv::putText(frame, "(m)atch keypoints", cv::Point2i(5,155), CV_FONT_HERSHEY_PLAIN, 1.0, CV_RGB(0, 0, 255));
     //cv::putText(frame, point_names[i], image_points_cal[loc][i],CV_FONT_HERSHEY_PLAIN, 1.0, CV_RGB(0,255,0));
 }
 
@@ -956,8 +1008,12 @@ int main(int argc, char* argv[])
                 isdetecting=0;
                 helpflags=helpflags^1<<5;
             }
-        
+        }else if (keyresponse=='m'){
+            std::cout<<"Matching keypoints to the object"<<std::endl;
+            vis.match_keypoints();
         }
+        
+        
         
         if(iscalibrating==1){
             //Christoph
@@ -980,8 +1036,10 @@ int main(int argc, char* argv[])
             //detect keypoints on the image
             vis.detect_anatomy(frame, -1);
             vis.find_pose();
+            
             vis.detect_keypoints(frame);
             vis.render_detected(frame);
+            //vis.render_matched_detected(frame); //not actually working
         }
         
         if (isundistorting==1) {
