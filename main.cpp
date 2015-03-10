@@ -159,11 +159,20 @@ protected:
     cv::ORB orbdet{5000,1.2f,8,11,0,2,cv::ORB::HARRIS_SCORE,11}; //only use the 100 best features
     cv::SURF surfdet{200,4,2,true,true}; //don't bother with the orientation of the features
     //std::vector<cv::KeyPoint> kp;
-    std::vector<std::vector<cv::KeyPoint>> kp;
+    std::vector<std::vector<cv::KeyPoint>> kp; //key points found by surf
+    std::vector<std::vector<cv::Point3f>> pt3D; //points corresponding to the key points
     //cv::Mat desc;
     std::vector<cv::Mat> desc;
     cv::BFMatcher bfmatch{cv::NORM_L1,1}; //brute force matcher
-    cv::vector<cv::vector<cv::vector<cv::DMatch>>> surfmatch;
+    std::vector<std::vector<std::vector<cv::DMatch>>> surfmatch;
+    struct correspondence{ //a structure to hold information about matching locations in the video
+        std::vector<cv::Point2f> image_point;
+        std::vector<cv::Point3f> volume_point;
+        std::vector<float> distance;
+        std::vector<int> frameidx;
+        std::vector<cv::KeyPoint> kp;
+        std::vector<cv::Mat> desc;
+    };
     
     //background detector
     cv::BackgroundSubtractorMOG2 mog2{180,50,true}; //(200,16,false)
@@ -173,6 +182,7 @@ protected:
     cv::Mat distCoeffs;
     std::vector<cv::Mat> rvecs_cal, tvecs_cal;
     cv::Mat rvecs, tvecs;
+    cv::Mat rmat, tmat;
     double rms;
     
     //functions
@@ -202,7 +212,10 @@ public:
     void detect_keypoints(cv::Mat frame); //find the keypoints in the frame
     void render_detected(cv::Mat &frame); //draw the detected points on the frame
     void render_matched_detected(cv::Mat &frame); //draw the detected and matched points on the frames
-    void match_keypoints(); //filter the image keypoints and match them to the object
+    void match_keypoints(const Mesh &head); //filter the image keypoints and match them to the object
+    bool backproject2DPoint(const Mesh *mesh, const cv::Point2f &point2d, cv::Point3f &point3d); //find if a point on the displayed image intersects the mesh at any point
+    bool intersect_ray_triangle(Ray &Ray, Triangle &Triangle, double *out); //find if the ray interacts the triangle, if so return the position
+    void proj_2D_to_3D(const Mesh &head, const int framenum); //project 2D points to the 3D surface
     
     
     vis3D();
@@ -225,6 +238,8 @@ vis3D::vis3D(){
     rvecs_cal[0] = cv::Mat::zeros(1, 3, CV_64F); //Try initializing zeros
     tvecs_cal.resize(1);
     tvecs_cal[0] = cv::Mat::zeros(1, 3, CV_64F); //Try initializing zeros and fill in later
+    rmat = cv::Mat::zeros(3, 3, CV_64FC1);   // rotation matrix
+    tmat = cv::Mat::zeros(3, 1, CV_64FC1);   // translation matrix
     //std::vector<cv::Mat> rvecs, tvecs;
     
     //volume_points=&MRI_points;
@@ -765,10 +780,21 @@ void vis3D::render_matched_detected(cv::Mat &frame) //not actually working
     
 }
 
-void vis3D::match_keypoints()
+void vis3D::match_keypoints(const Mesh &head)
 {
     //filter the keypoints and match them in time and to the object itself!
     //TODO: use a knn match to better filter the keypoints
+    
+    //finding correspondences between the volume and image
+    std::cout<<"Calculating correspondences"<<std::endl;
+    for (int i=0; i<desc.size(); i++) {
+        std::cout<<"Corresponding frame "<<i<<std::endl;
+        cv::Rodrigues(rvecs, rmat); //convert vector to matrix
+        tvecs.copyTo(tmat); //still a vector?
+        proj_2D_to_3D(head,i);
+    }
+    
+    //matching the points between all frames
     std::cout<<"Matching a total of "<<desc.size()<<" frames"<<std::endl;
     for (int i=0; i<desc.size()-1; i++) { //this just matches, I probably should do some position and distance matching as well because not every keypoint is in every frame!
         surfmatch.push_back(std::vector<std::vector<cv::DMatch>>());
@@ -778,12 +804,194 @@ void vis3D::match_keypoints()
             bfmatch.match(desc[i], desc[j], surfmatch[i][j-i-1]); //match points to previous image
         }
     }
-    /*std::cout<<surfmatch.size()<<" ";
-    for (int i=0; i<surfmatch.size(); i++) {
-        std::cout<<surfmatch[i].size()<<" ";
-    }
-    std::cout<<std::endl;*/
+
 }
+
+
+/* Functions for Möller–Trumbore intersection algorithm */
+
+cv::Point3f CROSS(cv::Point3f v1, cv::Point3f v2)
+{
+    cv::Point3f tmp_p;
+    tmp_p.x =  v1.y*v2.z - v1.z*v2.y;
+    tmp_p.y =  v1.z*v2.x - v1.x*v2.z;
+    tmp_p.z =  v1.x*v2.y - v1.y*v2.x;
+    return tmp_p;
+}
+
+double DOT(cv::Point3f v1, cv::Point3f v2)
+{
+    return v1.x*v2.x + v1.y*v2.y + v1.z*v2.z;
+}
+
+cv::Point3f SUB(cv::Point3f v1, cv::Point3f v2)
+{
+    cv::Point3f tmp_p;
+    tmp_p.x =  v1.x - v2.x;
+    tmp_p.y =  v1.y - v2.y;
+    tmp_p.z =  v1.z - v2.z;
+    return tmp_p;
+}
+
+/* End functions for Möller–Trumbore intersection algorithm
+ *  */
+
+// Function to get the nearest 3D point to the Ray origin, thanks to Edgar Riba
+cv::Point3f get_nearest_3D_point(std::vector<cv::Point3f> &points_list, cv::Point3f origin)
+{
+    cv::Point3f p1 = points_list[0];
+    cv::Point3f p2 = points_list[1];
+    
+    double d1 = std::sqrt( std::pow(p1.x-origin.x, 2) + std::pow(p1.y-origin.y, 2) + std::pow(p1.z-origin.z, 2) );
+    double d2 = std::sqrt( std::pow(p2.x-origin.x, 2) + std::pow(p2.y-origin.y, 2) + std::pow(p2.z-origin.z, 2) );
+    
+    if(d1 < d2)
+    {
+        return p1;
+    }
+    else
+    {
+        return p2;
+    }
+}
+
+void vis3D::proj_2D_to_3D(const Mesh &head,const int framenum)
+{
+    pt3D.push_back(std::vector<cv::Point3f>());
+    std::cout<<"There are "<<kp[framenum].size()<<" points to correspond"<<std::endl;
+    for (int i=0; i<kp[framenum].size(); i++) {
+        std::cout<<"Corresponding point "<<i<<std::endl;
+        backproject2DPoint(&head, kp[framenum][i].pt, pt3D[i][framenum]);
+    }
+}
+
+
+// Back project a 2D point to 3D and returns if it's on the object surface, thanks to Edgar Riba
+bool vis3D::backproject2DPoint(const Mesh *mesh, const cv::Point2f &point2d, cv::Point3f &point3d)
+{
+    // Triangles list of the object mesh
+    std::vector<std::vector<int> > triangles_list = mesh->getTrianglesList();
+    
+    double lambda = 8;
+    double u = point2d.x;
+    double v = point2d.y;
+    
+    // Point in vector form
+    cv::Mat point2d_vec = cv::Mat::ones(3, 1, CV_64F); // 3x1
+    point2d_vec.at<double>(0) = u * lambda;
+    point2d_vec.at<double>(1) = v * lambda;
+    point2d_vec.at<double>(2) = lambda;
+    
+    // Point in camera coordinates
+    cv::Mat X_c = cameraMatrix.inv() * point2d_vec ; // 3x1
+    
+    // Point in world coordinates
+    cv::Mat X_w = rmat.inv() * ( X_c - tmat ); // 3x1
+    
+    // Center of projection
+    cv::Mat C_op = cv::Mat(rmat.inv()).mul(-1) * tvecs; // 3x1
+    
+    // Ray direction vector
+    cv::Mat ray = X_w - C_op; // 3x1
+    ray = ray / cv::norm(ray); // 3x1
+    
+    // Set up Ray
+    Ray R((cv::Point3f)C_op, (cv::Point3f)ray);
+    
+    // A vector to store the intersections found
+    std::vector<cv::Point3f> intersections_list;
+    
+    // Loop for all the triangles and check the intersection
+    for (unsigned int i = 0; i < triangles_list.size(); i++)
+    {
+        cv::Point3f V0 = mesh->getVertex(triangles_list[i][0]);
+        cv::Point3f V1 = mesh->getVertex(triangles_list[i][1]);
+        cv::Point3f V2 = mesh->getVertex(triangles_list[i][2]);
+        
+        Triangle T(i, V0, V1, V2);
+        
+        double out;
+        if(this->intersect_ray_triangle(R, T, &out))
+        {
+            cv::Point3f tmp_pt = R.getP0() + out*R.getP1(); // P = O + t*D
+            intersections_list.push_back(tmp_pt);
+        }
+    }
+    
+    // If there are intersection, find the nearest one
+    if (!intersections_list.empty())
+    {
+        point3d = get_nearest_3D_point(intersections_list, R.getP0());
+        return true;
+    }
+    else
+    {
+        return false;
+    }
+}
+
+
+
+// Möller–Trumbore intersection algorithm, thanks to Edgar Riba
+bool vis3D::intersect_ray_triangle(Ray &Ray, Triangle &Triangle, double *out)
+{
+    const double EPSILON = 0.000001;
+    
+    cv::Point3f e1, e2;
+    cv::Point3f P, Q, T;
+    double det, inv_det, u, v;
+    double t;
+    
+    cv::Point3f V1 = Triangle.getV0();  // Triangle vertices
+    cv::Point3f V2 = Triangle.getV1();
+    cv::Point3f V3 = Triangle.getV2();
+    
+    cv::Point3f O = Ray.getP0(); // Ray origin
+    cv::Point3f D = Ray.getP1(); // Ray direction
+    
+    //Find vectors for two edges sharing V1
+    e1 = SUB(V2, V1);
+    e2 = SUB(V3, V1);
+    
+    // Begin calculation determinant - also used to calculate U parameter
+    P = CROSS(D, e2);
+    
+    // If determinant is near zero, ray lie in plane of triangle
+    det = DOT(e1, P);
+    
+    //NOT CULLING
+    if(det > -EPSILON && det < EPSILON) return false;
+    inv_det = 1.f / det;
+    
+    //calculate distance from V1 to ray origin
+    T = SUB(O, V1);
+    
+    //Calculate u parameter and test bound
+    u = DOT(T, P) * inv_det;
+    
+    //The intersection lies outside of the triangle
+    if(u < 0.f || u > 1.f) return false;
+    
+    //Prepare to test v parameter
+    Q = CROSS(T, e1);
+    
+    //Calculate V parameter and test bound
+    v = DOT(D, Q) * inv_det;
+    
+    //The intersection lies outside of the triangle
+    if(v < 0.f || u + v  > 1.f) return false;
+    
+    t = DOT(e2, Q) * inv_det;
+    
+    if(t > EPSILON) { //ray intersection
+        *out = t;
+        return true;
+    }
+    
+    // No hit, no win
+    return false;
+}
+
 
 
 void bound_rect(cv::Rect &rect, cv::Point2i size)
@@ -1016,7 +1224,7 @@ int main(int argc, char* argv[])
             }
         }else if (keyresponse=='m'){
             std::cout<<"Matching keypoints to the object"<<std::endl;
-            vis.match_keypoints();
+            vis.match_keypoints(head);
         }
         
         
