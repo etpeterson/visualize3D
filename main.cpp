@@ -19,6 +19,8 @@
     d. bound the points to the face plus a buffer (this could later be the head plus a buffer if we change our method)
     e. crop the model down to as few verticies as possible, maybe even lower resolution of the surface or something?
     f. pre-filter the keypoints as much as possible before trying to find them on the object
+    g. save the output points from the object interaction
+    h. make sure the coordinates are valid for the 3D interaction code
  3. Find the pose using matched points rather than face detection
     a. Could compare to the pose from face detection?
  
