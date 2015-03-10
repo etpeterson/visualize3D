@@ -5,15 +5,20 @@
  TODO ETP:
  1. Cascade detector improvement
     a. Filter the locations based on how they move around over time?
-    b. Maybe also a spatial-temporal filter?
+    b. Maybe also a spatial-temporal filter? Kalman of the head pose?
  3. The checkerboard undistortion crashes when it isn't detected in a frame, why?
- 4. Try ORB rather than SURF, it's supposedly faster and more accurate as well as being free!
- 5. Test the image undistortion
+ 4. Test the image undistortion
+ 5. Use the checkerboard calibration rather than the head one. Why doesn't it look good though?
  
  To improve matching:
  1. Initial pose with face detection
  2. Find matching points simliar to model registration by finding locations on the 3D data of the image markers from ORB detectors
-    a. Use a single image to find matches but later use video and filtering to find the best matches
+    a. make sure the head pose is the correct one, not the static one
+    b. verify that the head pose is valid in the first place.
+    c. modify get_nearest_3D_point so it works with many points rather than just 2!
+    d. bound the points to the face plus a buffer (this could later be the head plus a buffer if we change our method)
+    e. crop the model down to as few verticies as possible, maybe even lower resolution of the surface or something?
+    f. pre-filter the keypoints as much as possible before trying to find them on the object
  3. Find the pose using matched points rather than face detection
     a. Could compare to the pose from face detection?
  
@@ -921,7 +926,7 @@ bool vis3D::backproject2DPoint(const Mesh *mesh, const cv::Point2f &point2d, cv:
     // If there are intersection, find the nearest one
     if (!intersections_list.empty())
     {
-        point3d = get_nearest_3D_point(intersections_list, R.getP0());
+        point3d = get_nearest_3D_point(intersections_list, R.getP0()); //this only works for 2 points, not many!
         return true;
     }
     else
