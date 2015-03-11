@@ -792,12 +792,32 @@ void vis3D::match_keypoints(const Mesh &head)
     //filter the keypoints and match them in time and to the object itself!
     //TODO: use a knn match to better filter the keypoints
     
+    //clean the points a little bit before doing the heavy processing!
+    //remove them if they're too close together (1 pixel)
+    //maybe sorting would do the trick?
+    /*for (long i=kp.size(); i>=0; i--) { //frame loop
+        
+        while(kp[i])
+            std::iterator<cv::Point2f> kp[i].begin();
+        for (long j=kp[i].size(); j>=0; j--) { //point loop
+            for (long k=kp[i].size(); k>=0; k--) {
+                if((abs(kp[i][j].pt.x-kp[i][k].pt.x)+abs(kp[i][j].pt.y-kp[i][k].pt.y))>1){
+                    kp[i].erase(;
+                }
+            }
+            
+            std::cout<<kp[i][j].pt<<" "<<kp[i][j].response<<std::endl;
+            //if(kp[i][j].pt-kp[i].pt){
+                
+            }
+    }*/
+    
     //finding correspondences between the volume and image
     std::cout<<"Calculating correspondences"<<std::endl;
     for (int i=0; i<desc.size(); i++) {
         std::cout<<"Corresponding frame "<<i<<std::endl;
-        cv::Rodrigues(rvecs, rmat); //convert vector to matrix
-        tvecs.copyTo(tmat); //still a vector?
+        cv::Rodrigues(rvecs_cal[i], rmat); //convert vector to matrix
+        tvecs_cal[i].copyTo(tmat); //still a vector?
         proj_2D_to_3D(head,i);
     }
     
