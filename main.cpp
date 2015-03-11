@@ -242,9 +242,9 @@ vis3D::vis3D(){
     distCoeffs = cv::Mat::zeros(5, 1, CV_64F); //only a 5 parameter fit
     rms=0;
     rvecs_cal.resize(1);
-    rvecs_cal[0] = cv::Mat::zeros(1, 3, CV_64F); //Try initializing zeros
+    rvecs_cal[0] = cv::Mat::zeros(3, 1, CV_64F); //Try initializing zeros
     tvecs_cal.resize(1);
-    tvecs_cal[0] = cv::Mat::zeros(1, 3, CV_64F); //Try initializing zeros and fill in later
+    tvecs_cal[0] = cv::Mat::zeros(3, 1, CV_64F); //Try initializing zeros and fill in later
     rmat = cv::Mat::zeros(3, 3, CV_64FC1);   // rotation matrix
     tmat = cv::Mat::zeros(3, 1, CV_64FC1);   // translation matrix
     //std::vector<cv::Mat> rvecs, tvecs;
@@ -754,11 +754,33 @@ void vis3D::detect_keypoints(cv::Mat frame)
     //orbdet(frame,mask,kp,desc); //ORB detects fairly well, but mostly around the edges of the head
     //orbdet.detect(frame, kp);
     //orbdet.detect(frame, kp, mask);
-    //surfdet.detect(frame, kp);
+    //surfdet.detect(frame, kp.back());
     //surfdet.compute(frame,kp,desc);
     surfdet(frame,cv::Mat::ones(frame.size(),CV_8U),kp.back(),desc.back()); //detect points in current image
     //std::cout<<kp.back()[0].pt<<" "<<kp.back()[0].response<<std::endl;
     //std::cout<<desc.back().size()<<std::endl;
+    
+    //clean the points a little bit before doing the heavy processing!
+    //remove them if they're too close together (1 pixel)
+    //maybe sorting would do the trick?
+    
+    
+    //the below is to speed up further calculations by removing points too close together, but it really doesn't remove many points and slows down the detection
+    /*surfdet.detect(frame, kp.back());
+    //for (long i=0; i<kp.size(); i++) { //frame loop
+        std::cout<<"there are "<<kp.back().size()<<" points in this frame"<<std::endl;
+        for (long j=kp.back().size()-2; j>=0; j--) { //point loop from 2nd to last point to the beginning
+            for (long k=kp.back().size()-1; k>j; k--) { //partial loop over remaining values
+                if((abs(kp.back()[j].pt.x-kp.back()[k].pt.x)+abs(kp.back()[j].pt.y-kp.back()[k].pt.y))<1){
+                    //std::cout<<j<<" "<<k<<" "<<kp.back()[j].pt<<" "<<kp.back()[k].pt<<std::endl;
+                    kp.back().erase(kp.back().begin()+k);
+                }
+            }
+        }
+        std::cout<<"there are now "<<kp.back().size()<<" points in this frame"<<std::endl;
+    //}
+    surfdet.compute(frame,kp.back(),desc.back());*/
+    
     
     //match the features to the previous frame (if any)
     //if (desc.size()>1) {
@@ -792,25 +814,6 @@ void vis3D::match_keypoints(const Mesh &head)
     //filter the keypoints and match them in time and to the object itself!
     //TODO: use a knn match to better filter the keypoints
     
-    //clean the points a little bit before doing the heavy processing!
-    //remove them if they're too close together (1 pixel)
-    //maybe sorting would do the trick?
-    /*for (long i=kp.size(); i>=0; i--) { //frame loop
-        
-        while(kp[i])
-            std::iterator<cv::Point2f> kp[i].begin();
-        for (long j=kp[i].size(); j>=0; j--) { //point loop
-            for (long k=kp[i].size(); k>=0; k--) {
-                if((abs(kp[i][j].pt.x-kp[i][k].pt.x)+abs(kp[i][j].pt.y-kp[i][k].pt.y))>1){
-                    kp[i].erase(;
-                }
-            }
-            
-            std::cout<<kp[i][j].pt<<" "<<kp[i][j].response<<std::endl;
-            //if(kp[i][j].pt-kp[i].pt){
-                
-            }
-    }*/
     
     //finding correspondences between the volume and image
     std::cout<<"Calculating correspondences"<<std::endl;
