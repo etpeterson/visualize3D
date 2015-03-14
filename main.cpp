@@ -9,6 +9,7 @@
  3. The checkerboard undistortion crashes when it isn't detected in a frame, why?
  4. Test the image undistortion
  5. Use the checkerboard calibration rather than the head one. Why doesn't it look good though?
+ 6. Change to using the internal framesize rather than function inputs (and maybe put it in the constructor?)
  
  To improve matching:
  1. Initial pose with face detection
@@ -21,6 +22,7 @@
     f. pre-filter the keypoints as much as possible before trying to find them on the object
     g. save the output points from the object interaction
     h. make sure the coordinates are valid for the 3D interaction code
+    i. speed up the frame detection by computing the descriptors in the matching section when needed rather than dynamically
  3. Find the pose using matched points rather than face detection
     a. Could compare to the pose from face detection?
  
@@ -135,6 +137,7 @@ protected:
     //points
     int min_cal_pts=4; //minimum points needed in a calibration frame
     int npoints=6; //number of points we know (4 in the face, 54 in the chessboard)
+    cv::Point2i framesize;
     //cv::Point2i court_img_verts[22]; //all the court verticies
     std::vector< std::vector<cv::Point2f> > image_points_cal; //must be floats otherwise we get strange issues from
     std::vector<cv::Point2f> image_points;
@@ -168,6 +171,7 @@ protected:
     //std::vector<cv::KeyPoint> kp;
     std::vector<std::vector<cv::KeyPoint>> kp; //key points found by surf
     std::vector<std::vector<cv::Point3f>> pt3D; //points corresponding to the key points
+    std::vector<std::vector<bool>> validpoint; //true if valid (for whatever reason) false if not
     //cv::Mat desc;
     std::vector<cv::Mat> desc;
     cv::BFMatcher bfmatch{cv::NORM_L1,1}; //brute force matcher
@@ -223,6 +227,7 @@ public:
     bool backproject2DPoint(const Mesh *mesh, const cv::Point2f &point2d, cv::Point3f &point3d); //find if a point on the displayed image intersects the mesh at any point
     bool intersect_ray_triangle(Ray &Ray, Triangle &Triangle, double *out); //find if the ray interacts the triangle, if so return the position
     void proj_2D_to_3D(const Mesh &head, const int framenum); //project 2D points to the 3D surface
+    void setframesize(cv::Point2i szin){framesize=szin;}; //sets the internal variable framesize
     
     
     vis3D();
@@ -741,6 +746,7 @@ void vis3D::detect_keypoints(cv::Mat frame)
     //allocate space in our keypoint and descriptor vectors
     kp.push_back(std::vector<cv::KeyPoint>());
     desc.push_back(cv::Mat());
+    validpoint.push_back(std::vector<bool>()); //allocate trues later down
     
     //save the pose (which was computed previously!)
     rvecs_cal.push_back(rvecs);
@@ -754,11 +760,14 @@ void vis3D::detect_keypoints(cv::Mat frame)
     //orbdet(frame,mask,kp,desc); //ORB detects fairly well, but mostly around the edges of the head
     //orbdet.detect(frame, kp);
     //orbdet.detect(frame, kp, mask);
-    //surfdet.detect(frame, kp.back());
+    //surfdet.detect(frame, kp.back()); //find the keypoints in the image
     //surfdet.compute(frame,kp,desc);
-    surfdet(frame,cv::Mat::ones(frame.size(),CV_8U),kp.back(),desc.back()); //detect points in current image
+    surfdet(frame,cv::Mat::ones(frame.size(),CV_8U),kp.back(),desc.back()); //detect points in current image and calculates the descriptors
     //std::cout<<kp.back()[0].pt<<" "<<kp.back()[0].response<<std::endl;
     //std::cout<<desc.back().size()<<std::endl;
+    
+    //call them all valid points for the moment
+    validpoint.back().resize(kp.back().size(),true);
     
     //clean the points a little bit before doing the heavy processing!
     //remove them if they're too close together (1 pixel)
@@ -766,6 +775,7 @@ void vis3D::detect_keypoints(cv::Mat frame)
     
     
     //the below is to speed up further calculations by removing points too close together, but it really doesn't remove many points and slows down the detection
+    //not sure why I moved this to this function, but it probably should be in match_keypoints
     /*surfdet.detect(frame, kp.back());
     //for (long i=0; i<kp.size(); i++) { //frame loop
         std::cout<<"there are "<<kp.back().size()<<" points in this frame"<<std::endl;
@@ -814,10 +824,12 @@ void vis3D::match_keypoints(const Mesh &head)
     //filter the keypoints and match them in time and to the object itself!
     //TODO: use a knn match to better filter the keypoints
     
+    //start by assuming all points are valid
+    
     
     //finding correspondences between the volume and image
     std::cout<<"Calculating correspondences"<<std::endl;
-    for (int i=0; i<desc.size(); i++) {
+    for (int i=0; i<kp.size(); i++) {
         std::cout<<"Corresponding frame "<<i<<std::endl;
         cv::Rodrigues(rvecs_cal[i], rmat); //convert vector to matrix
         tvecs_cal[i].copyTo(tmat); //still a vector?
@@ -834,6 +846,8 @@ void vis3D::match_keypoints(const Mesh &head)
             bfmatch.match(desc[i], desc[j], surfmatch[i][j-i-1]); //match points to previous image
         }
     }
+    
+    std::cout<<"keypoint matching complete!"<<std::endl;
 
 }
 
@@ -888,11 +902,48 @@ cv::Point3f get_nearest_3D_point(std::vector<cv::Point3f> &points_list, cv::Poin
 void vis3D::proj_2D_to_3D(const Mesh &head,const int framenum)
 {
     pt3D.push_back(std::vector<cv::Point3f>());
+    pt3D[framenum].resize(kp[framenum].size(),cv::Point3f(0,0,0));
+    int skipctr=0,hitctr=0,missctr=0;
+    cv::Point2i ptround;
+    time_t tbegin, tend;
+    
+    //let's try to speed this process up with a dirty probability map
+    cv::Mat precise(framesize.y,framesize.x,CV_32F,0.5), probability(framesize.y,framesize.x,CV_32F,0.5); //initially a 50/50 probability everywhere
+    //cv::namedWindow("probability",5); //set up a window
+    //std::cout<<"precise size "<<precise.size()<<std::endl;
+    
+    time(&tbegin);
     std::cout<<"There are "<<kp[framenum].size()<<" points to correspond"<<std::endl;
     for (int i=0; i<kp[framenum].size(); i++) {
-        std::cout<<"Corresponding point "<<i<<std::endl;
-        backproject2DPoint(&head, kp[framenum][i].pt, pt3D[i][framenum]);
+        ptround=cv::Point2i(cvRound(kp[framenum][i].pt.x),cvRound(kp[framenum][i].pt.y));
+        if ((i+1)%25==0) { //every 100 searches calculate the new probability
+            //std::cout<<"calculating the new probability"<<std::endl;
+            cv::GaussianBlur(precise, probability, cv::Size(11,11), 2.0,2.0,cv::BORDER_REFLECT);
+            //imshow("probability", probability);
+            //cv::waitKey(100);
+        }
+        if (validpoint[framenum][i] && probability.at<float>(ptround.y,ptround.x)>=0.5){
+            //std::cout<<"Corresponding point "<<i<<" at "<<kp[framenum][i].pt;
+            validpoint[framenum][i]=backproject2DPoint(&head, kp[framenum][i].pt, pt3D[i][framenum]);
+            if (validpoint[framenum][i]) {
+                //std::cout<<" hit!"<<std::endl;
+                precise.at<float>(ptround.y,ptround.x)=1.0; //what about rounding? I can't see the opencv website so I'm guessing here
+                hitctr++;
+            }else{
+                //std::cout<<" miss!"<<std::endl;
+                precise.at<float>(ptround.y,ptround.x)=0.0;
+                missctr++;
+            }
+        }else{
+            //std::cout<<"skipped point "<<i<<" at "<<kp[framenum][i].pt<<" validity "<<validpoint[framenum][i]<<" probability "<<probability.at<float>(ptround.y,ptround.x)<<std::endl;
+            skipctr++;
+        }
     }
+    std::cout<<"hit a total of "<<hitctr<<" points"<<std::endl;
+    std::cout<<"missed a total of "<<missctr<<" points"<<std::endl;
+    std::cout<<"skipped a total of "<<skipctr<<" points"<<std::endl;
+    time(&tend);
+    std::cout<<"this frame took "<<difftime(tend,tbegin)<<" s "<<std::endl;
 }
 
 
@@ -951,6 +1002,7 @@ bool vis3D::backproject2DPoint(const Mesh *mesh, const cv::Point2f &point2d, cv:
     // If there are intersection, find the nearest one
     if (!intersections_list.empty())
     {
+        std::cout<<"found "<<intersections_list.size()<<" interactions"<<std::endl;
         point3d = get_nearest_3D_point(intersections_list, R.getP0()); //this only works for 2 points, not many!
         return true;
     }
@@ -1162,9 +1214,11 @@ int main(int argc, char* argv[])
     cv::setMouseCallback("frame",CallBackFunc,(void*) &frame);
     
     cap.read(frame); //read the frame for setup purposes
+    std::cout<<"framesize "<<frame.size()<<std::endl;
     
     /* define the visualizer */
     vis3D vis; //initialize the visualizer
+    vis.setframesize(frame.size()); //for internal use
     vis.setup_camera_matrix(frame.size()); //setup the initial guess camera matrix
     vis.setup_rvec(); //setup the initial guess rotation
     vis.setup_tvec(); //setup the initial guess translation
