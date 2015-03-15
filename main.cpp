@@ -19,10 +19,11 @@
     c. modify get_nearest_3D_point so it works with many points rather than just 2!
     d. bound the points to the face plus a buffer (this could later be the head plus a buffer if we change our method)
     e. crop the model down to as few verticies as possible, maybe even lower resolution of the surface or something?
-    f. pre-filter the keypoints as much as possible before trying to find them on the object
+    f. do a ratio test of the current matched detected points
     g. save the output points from the object interaction
     h. make sure the coordinates are valid for the 3D interaction code
     i. speed up the frame detection by computing the descriptors in the matching section when needed rather than dynamically
+    j. display the matched detected points!
  3. Find the pose using matched points rather than face detection
     a. Could compare to the pose from face detection?
  
@@ -174,7 +175,7 @@ protected:
     std::vector<std::vector<bool>> validpoint; //true if valid (for whatever reason) false if not
     //cv::Mat desc;
     std::vector<cv::Mat> desc;
-    cv::BFMatcher bfmatch{cv::NORM_L1,1}; //brute force matcher
+    cv::BFMatcher bfmatch{cv::NORM_L1,true}; //brute force matcher
     std::vector<std::vector<std::vector<cv::DMatch>>> surfmatch;
     struct correspondence{ //a structure to hold information about matching locations in the video
         std::vector<cv::Point2f> image_point;
@@ -765,6 +766,7 @@ void vis3D::detect_keypoints(cv::Mat frame)
     surfdet(frame,cv::Mat::ones(frame.size(),CV_8U),kp.back(),desc.back()); //detect points in current image and calculates the descriptors
     //std::cout<<kp.back()[0].pt<<" "<<kp.back()[0].response<<std::endl;
     //std::cout<<desc.back().size()<<std::endl;
+    //std::cout<<" kp size "<<kp.back().size()<<" desc size "<<desc.back().size();
     
     //call them all valid points for the moment
     validpoint.back().resize(kp.back().size(),true);
@@ -823,31 +825,121 @@ void vis3D::match_keypoints(const Mesh &head)
 {
     //filter the keypoints and match them in time and to the object itself!
     //TODO: use a knn match to better filter the keypoints
+    time_t tbegin, tend;
     
     //start by assuming all points are valid
     
     
     //finding correspondences between the volume and image
-    std::cout<<"Calculating correspondences"<<std::endl;
+    /*std::cout<<"Calculating correspondences from "<<kp.size()<<" frames"<<std::endl;
+    time(&tbegin);
     for (int i=0; i<kp.size(); i++) {
         std::cout<<"Corresponding frame "<<i<<std::endl;
         cv::Rodrigues(rvecs_cal[i], rmat); //convert vector to matrix
         tvecs_cal[i].copyTo(tmat); //still a vector?
-        proj_2D_to_3D(head,i);
+        proj_2D_to_3D(head,i); //This takes forever!
+    }
+    time(&tend);
+    std::cout<<"all 2D to 3D correspondances took "<<difftime(tend,tbegin)<<" s "<<std::endl;*/
+    
+    
+    //matching the points between all frames using a radiusMatch to return all matches less than a specified distance
+    std::cout<<"Matching a total of "<<desc.size()<<" frames"<<std::endl;
+    //std::vector<cv::Mat> matchmat;
+    std::vector<std::vector<cv::DMatch>> tmpmatch;
+    time(&tbegin);
+    bfmatch.add(desc); //add all training frames to the matcher
+    surfmatch.resize(desc.size()); //create the base arrays for the matcher to use
+    //matchmat.resize(desc.size()); //create the base size
+    for (int i=0; i<desc.size(); i++) {
+        /*for (int k=0; k<desc.size(); k++) {  //masks are impossible, I don't know what size they're supposed to be and there's no documentation anywhere!
+            if (i==k) { //if it's the same frame we need to mask it out
+                matchmat[k]=cv::Mat::zeros(desc[k].rows, desc[k].cols, CV_8UC1);
+                //matchmat[k]=cv::Mat::zeros(desc[k].size(), CV_8UC1);
+                std::cout<<matchmat[k].size()<<" "<<desc[k].size()<<std::endl;
+            }else{
+                matchmat[k]=cv::Mat::ones(desc[k].rows, desc[i].cols, CV_8UC1);
+                //matchmat[k]=cv::Mat::ones(desc[k].size(), CV_8UC1);
+            }
+        }
+        std::cout<<matchmat.size()<<" "<<matchmat[i].size()<<" "<<matchmat[i].type()<<" "<<CV_8UC1<<" rows "<<matchmat[i].rows<<" cols "<<matchmat[i].cols<<std::endl;
+        std::cout<<"0,0 "<<matchmat[i].at<uchar>(0, 0)<<std::endl;*/
+        bfmatch.radiusMatch(desc[i], tmpmatch, 1.0);
+        surfmatch[i].resize(tmpmatch.size());
+        std::cout<<"desc["<<i<<"].size() "<<desc[i].size()<<" tmpmatch.size() "<<tmpmatch.size()<<std::endl;
+        /* OK, so this code goes through and picks the best matches and puts them into the final match vector.
+         It could definitely be improved, like through a ratio test or something for example.
+         At the moment it only grabs the top match for each frame and uses that.
+         The next step is to put the cleaned points into the 2D to 3D matching code*/
+        for (int j=0; j<tmpmatch.size(); j++) {
+            surfmatch[i][j].resize(desc.size()); //allocate one match for each image
+            for (int k=0; k<tmpmatch[j].size(); k++) {
+                if (tmpmatch[j][k].distance>0 && surfmatch[i][j][tmpmatch[j][k].imgIdx].imgIdx==-1) { //if it's not a self match and we haven't put anything there yet
+                    surfmatch[i][j][tmpmatch[j][k].imgIdx]=tmpmatch[j][k];
+                }
+            }
+        }
+        for (int k=0; k<tmpmatch[0].size(); k++) {
+            std::cout<<"match "<<k<<" distance "<<tmpmatch[0][k].distance<<" imgIdx "<<tmpmatch[0][k].imgIdx<<" queryIdx "<<tmpmatch[0][k].queryIdx<<" trainIdx "<<tmpmatch[0][k].trainIdx<<std::endl;
+        }
+        for (int k=0; k<surfmatch[i][0].size(); k++) {
+            std::cout<<"match "<<k<<" distance "<<surfmatch[i][0][k].distance<<" imgIdx "<<surfmatch[i][0][k].imgIdx<<" queryIdx "<<surfmatch[i][0][k].queryIdx<<" trainIdx "<<surfmatch[i][0][k].trainIdx<<std::endl;
+        }
+        /*for (int k=0; k<surfmatch[i][0].size(); k++) {
+            std::cout<<"match "<<k<<" distance "<<surfmatch[i][0][k].distance<<" imgIdx "<<surfmatch[i][0][k].imgIdx<<" queryIdx "<<surfmatch[i][0][k].queryIdx<<" trainIdx "<<surfmatch[i][0][k].trainIdx<<std::endl;
+        }*/
     }
     
+    
+    std::cout<<"keypoint matching complete!"<<std::endl;
+    time(&tend);
+    std::cout<<"all keypoint matching took "<<difftime(tend,tbegin)<<" s "<<std::endl;
+    
+    
+    /* ETP 20150314 moving from not matching the same frame to matching the current frame to all frames
+     note that this matches the frames to themselves as well, so we need to use a knnMatch approach
     //matching the points between all frames
     std::cout<<"Matching a total of "<<desc.size()<<" frames"<<std::endl;
+    time(&tbegin);
     for (int i=0; i<desc.size()-1; i++) { //this just matches, I probably should do some position and distance matching as well because not every keypoint is in every frame!
         surfmatch.push_back(std::vector<std::vector<cv::DMatch>>());
         for (int j=i+1; j<desc.size(); j++) {
             std::cout<<"matching frame "<<i<<" to frame "<<j<<std::endl;
             surfmatch[i].push_back(std::vector<cv::DMatch>());
             bfmatch.match(desc[i], desc[j], surfmatch[i][j-i-1]); //match points to previous image
+            std::cout<<"frame 1 "<<desc[i].size()<<" frame2 "<<desc[j].size()<<" surfmatch size "<<surfmatch[i][j-i-1].size()<<std::endl;
         }
+        
     }
-    
     std::cout<<"keypoint matching complete!"<<std::endl;
+    time(&tend);
+    std::cout<<"all keypoint matching took "<<difftime(tend,tbegin)<<" s "<<std::endl;
+    
+    
+    //cleaning the points
+    std::cout<<"Cleaning the keypoints from a total of "<<desc.size()<<" frames"<<std::endl;
+    time(&tbegin);
+    for (int i=0; i<desc.size()-1; i++) { //this just matches, I probably should do some position and distance matching as well because not every keypoint is in every frame!
+        for (int j=i+1; j<desc.size(); j++) {
+            int ii=j-i-1;
+            std::cout<<"i "<<i<<" ii "<<ii<<" j "<<j<<std::endl;
+            std::cout<<"initial # of matches "<<surfmatch[i][ii].size()<<std::endl;
+            for (long int k=surfmatch[i][ii].size(); k>=0; k--) {
+                if (surfmatch[i][ii][k].distance>1) {
+                    surfmatch[i][ii].erase(surfmatch[i][ii].begin()+k); //erase
+                }
+            }
+            std::cout<<"final # of matches "<<surfmatch[i][ii].size()<<std::endl;
+            //for (int k=0;k<surfmatch[i][ii].size();k++){
+            //    std::cout<<" distance "<<surfmatch[i][ii][k].distance<<" imgIdx "<<surfmatch[i][ii][k].imgIdx<<" queryIdx "<<surfmatch[i][ii][k].queryIdx<<" trainIdx "<<surfmatch[i][ii][k].trainIdx<<std::endl;
+            //}
+        }
+        
+    }
+    std::cout<<"cleaning complete!"<<std::endl;
+    time(&tend);
+    std::cout<<"all keypoint cleaning took "<<difftime(tend,tbegin)<<" s "<<std::endl;
+    ETP moving to knnMatch 20150315 end*/
 
 }
 
@@ -1002,7 +1094,7 @@ bool vis3D::backproject2DPoint(const Mesh *mesh, const cv::Point2f &point2d, cv:
     // If there are intersection, find the nearest one
     if (!intersections_list.empty())
     {
-        std::cout<<"found "<<intersections_list.size()<<" interactions"<<std::endl;
+        std::cout<<"found "<<intersections_list.size()<<" interactions!"<<std::endl;
         point3d = get_nearest_3D_point(intersections_list, R.getP0()); //this only works for 2 points, not many!
         return true;
     }
