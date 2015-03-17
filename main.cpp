@@ -24,8 +24,14 @@
     h. make sure the coordinates are valid for the 3D interaction code
     i. speed up the frame detection by computing the descriptors in the matching section when needed rather than dynamically
     j. display the matched detected points!
+    k. make sure the points don't cross link to each other!
  3. Find the pose using matched points rather than face detection
     a. Could compare to the pose from face detection?
+ 4. Alternative functions that could be of help
+    a. findHomography - this finds the transformation between two point sets and finds outliers. I would just need to filter out the background points initially somehow and match the points, at least between frames
+    b. kmeans - clustering would be good, but I need to know the number of initial clusters! This could work by sending in the SURF descriptors I think...
+    c. flann hierarchical clustering - I think this could be similar to kmeans except you don't need to know the number of clusters
+    d. my own matching and rejection algorithm...
  
  
  
@@ -175,7 +181,7 @@ protected:
     std::vector<std::vector<bool>> validpoint; //true if valid (for whatever reason) false if not
     //cv::Mat desc;
     std::vector<cv::Mat> desc;
-    cv::BFMatcher bfmatch{cv::NORM_L1,true}; //brute force matcher
+    cv::BFMatcher bfmatch{cv::NORM_L1,false}; //brute force matcher
     std::vector<std::vector<std::vector<cv::DMatch>>> surfmatch;
     struct correspondence{ //a structure to hold information about matching locations in the video
         std::vector<cv::Point2f> image_point;
@@ -830,17 +836,7 @@ void vis3D::match_keypoints(const Mesh &head)
     //start by assuming all points are valid
     
     
-    //finding correspondences between the volume and image
-    /*std::cout<<"Calculating correspondences from "<<kp.size()<<" frames"<<std::endl;
-    time(&tbegin);
-    for (int i=0; i<kp.size(); i++) {
-        std::cout<<"Corresponding frame "<<i<<std::endl;
-        cv::Rodrigues(rvecs_cal[i], rmat); //convert vector to matrix
-        tvecs_cal[i].copyTo(tmat); //still a vector?
-        proj_2D_to_3D(head,i); //This takes forever!
-    }
-    time(&tend);
-    std::cout<<"all 2D to 3D correspondances took "<<difftime(tend,tbegin)<<" s "<<std::endl;*/
+    
     
     
     //matching the points between all frames using a radiusMatch to return all matches less than a specified distance
@@ -864,19 +860,30 @@ void vis3D::match_keypoints(const Mesh &head)
         }
         std::cout<<matchmat.size()<<" "<<matchmat[i].size()<<" "<<matchmat[i].type()<<" "<<CV_8UC1<<" rows "<<matchmat[i].rows<<" cols "<<matchmat[i].cols<<std::endl;
         std::cout<<"0,0 "<<matchmat[i].at<uchar>(0, 0)<<std::endl;*/
-        bfmatch.radiusMatch(desc[i], tmpmatch, 1.0);
-        surfmatch[i].resize(tmpmatch.size());
+        //bfmatch.radiusMatch(desc[i], tmpmatch, 1.0);
+        bfmatch.knnMatch(desc[i], tmpmatch, 3*static_cast<int>(desc.size()));  //lets assume that 3*desc.size() will give us enough matches so that we have at least one in each frame
+        //surfmatch[i].resize(tmpmatch.size());
         std::cout<<"desc["<<i<<"].size() "<<desc[i].size()<<" tmpmatch.size() "<<tmpmatch.size()<<std::endl;
         /* OK, so this code goes through and picks the best matches and puts them into the final match vector.
          It could definitely be improved, like through a ratio test or something for example.
          At the moment it only grabs the top match for each frame and uses that.
          The next step is to put the cleaned points into the 2D to 3D matching code*/
         for (int j=0; j<tmpmatch.size(); j++) {
-            surfmatch[i][j].resize(desc.size()); //allocate one match for each image
-            for (int k=0; k<tmpmatch[j].size(); k++) {
-                if (tmpmatch[j][k].distance>0 && surfmatch[i][j][tmpmatch[j][k].imgIdx].imgIdx==-1) { //if it's not a self match and we haven't put anything there yet
-                    surfmatch[i][j][tmpmatch[j][k].imgIdx]=tmpmatch[j][k];
+            //surfmatch[i][j].resize(desc.size()); //allocate one match for each image
+            
+            if (tmpmatch[j][1].distance<0.7*tmpmatch[j][2].distance) { //if it's good according to Lowe's ratio test
+                surfmatch[i].push_back(std::vector<cv::DMatch>());
+                surfmatch[i].back().resize(desc.size());
+                for (int k=0; k<tmpmatch[j].size(); k++) { //faster would be converting this to a while loop!
+                    if (tmpmatch[j][k].distance>0 && surfmatch[i].back()[tmpmatch[j][k].imgIdx].imgIdx==-1) { //if it's not a self match and we haven't put anything there yet. note that these are sorted by distance, so we don't have to worry about that, the first valid one we hit is the right one
+                        //if (tmpmatch[j][k].distance>0 && surfmatch[i][j][tmpmatch[j][k].imgIdx].imgIdx==-1) { ORIGINAL IF
+                        //surfmatch[i][j][tmpmatch[j][k].imgIdx]=tmpmatch[j][k];
+                        surfmatch[i].back()[tmpmatch[j][k].imgIdx]=tmpmatch[j][k];
+                    }
                 }
+            
+            } else{ //remove the point from kp or set it to be invalid. or maybe this needs to be separate because of back and forth correspondances?
+                validpoint[i][j]=false;
             }
         }
         for (int k=0; k<tmpmatch[0].size(); k++) {
@@ -885,6 +892,7 @@ void vis3D::match_keypoints(const Mesh &head)
         for (int k=0; k<surfmatch[i][0].size(); k++) {
             std::cout<<"match "<<k<<" distance "<<surfmatch[i][0][k].distance<<" imgIdx "<<surfmatch[i][0][k].imgIdx<<" queryIdx "<<surfmatch[i][0][k].queryIdx<<" trainIdx "<<surfmatch[i][0][k].trainIdx<<std::endl;
         }
+        std::cout<<"size reduced from "<<tmpmatch.size()<<" to "<<surfmatch[i].size()<<" which is "<<100*surfmatch[i].size()/tmpmatch.size()<<"%"<<std::endl;
         /*for (int k=0; k<surfmatch[i][0].size(); k++) {
             std::cout<<"match "<<k<<" distance "<<surfmatch[i][0][k].distance<<" imgIdx "<<surfmatch[i][0][k].imgIdx<<" queryIdx "<<surfmatch[i][0][k].queryIdx<<" trainIdx "<<surfmatch[i][0][k].trainIdx<<std::endl;
         }*/
@@ -940,6 +948,20 @@ void vis3D::match_keypoints(const Mesh &head)
     time(&tend);
     std::cout<<"all keypoint cleaning took "<<difftime(tend,tbegin)<<" s "<<std::endl;
     ETP moving to knnMatch 20150315 end*/
+    
+    
+    
+    //finding correspondences between the volume and image
+    std::cout<<"Calculating correspondences from "<<kp.size()<<" frames"<<std::endl;
+     time(&tbegin);
+     for (int i=0; i<kp.size(); i++) {
+     std::cout<<"Corresponding frame "<<i<<std::endl;
+     cv::Rodrigues(rvecs_cal[i], rmat); //convert vector to matrix
+     tvecs_cal[i].copyTo(tmat); //still a vector?
+     proj_2D_to_3D(head,i); //This takes forever!
+     }
+     time(&tend);
+     std::cout<<"all 2D to 3D correspondances took "<<difftime(tend,tbegin)<<" s "<<std::endl;
 
 }
 
@@ -1005,7 +1027,7 @@ void vis3D::proj_2D_to_3D(const Mesh &head,const int framenum)
     //std::cout<<"precise size "<<precise.size()<<std::endl;
     
     time(&tbegin);
-    std::cout<<"There are "<<kp[framenum].size()<<" points to correspond"<<std::endl;
+    std::cout<<"There are less than "<<kp[framenum].size()<<" points to correspond"<<std::endl;
     for (int i=0; i<kp[framenum].size(); i++) {
         ptround=cv::Point2i(cvRound(kp[framenum][i].pt.x),cvRound(kp[framenum][i].pt.y));
         if ((i+1)%25==0) { //every 100 searches calculate the new probability
@@ -1015,14 +1037,14 @@ void vis3D::proj_2D_to_3D(const Mesh &head,const int framenum)
             //cv::waitKey(100);
         }
         if (validpoint[framenum][i] && probability.at<float>(ptround.y,ptround.x)>=0.5){
-            //std::cout<<"Corresponding point "<<i<<" at "<<kp[framenum][i].pt;
-            validpoint[framenum][i]=backproject2DPoint(&head, kp[framenum][i].pt, pt3D[i][framenum]);
+            std::cout<<"Corresponding point "<<i<<" at "<<kp[framenum][i].pt;
+            validpoint[framenum][i]=backproject2DPoint(&head, kp[framenum][i].pt, pt3D[framenum][i]);
             if (validpoint[framenum][i]) {
-                //std::cout<<" hit!"<<std::endl;
+                std::cout<<" hit!"<<std::endl;
                 precise.at<float>(ptround.y,ptround.x)=1.0; //what about rounding? I can't see the opencv website so I'm guessing here
                 hitctr++;
             }else{
-                //std::cout<<" miss!"<<std::endl;
+                std::cout<<" miss!"<<std::endl;
                 precise.at<float>(ptround.y,ptround.x)=0.0;
                 missctr++;
             }
