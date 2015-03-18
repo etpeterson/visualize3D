@@ -32,6 +32,7 @@
     b. kmeans - clustering would be good, but I need to know the number of initial clusters! This could work by sending in the SURF descriptors I think...
     c. flann hierarchical clustering - I think this could be similar to kmeans except you don't need to know the number of clusters
     d. my own matching and rejection algorithm...
+ 5. Implement some kind of thread pool for proj_2D_to_3D
  
  
  
@@ -60,6 +61,7 @@
 
 
 #include <iostream>
+#include <thread>
 //#include <functional>
 #include <opencv2/opencv.hpp>
 #include "opencv2/nonfree/features2d.hpp"
@@ -231,9 +233,9 @@ public:
     void render_detected(cv::Mat &frame); //draw the detected points on the frame
     void render_matched_detected(cv::Mat &frame); //draw the detected and matched points on the frames
     void match_keypoints(const Mesh &head); //filter the image keypoints and match them to the object
-    bool backproject2DPoint(const Mesh *mesh, const cv::Point2f &point2d, cv::Point3f &point3d); //find if a point on the displayed image intersects the mesh at any point
+    bool backproject2DPoint(const Mesh *mesh, const cv::Point2f &point2d, cv::Point3f &point3d,cv::Mat *rmat, cv::Mat *tmat); //find if a point on the displayed image intersects the mesh at any point
     bool intersect_ray_triangle(Ray &Ray, Triangle &Triangle, double *out); //find if the ray interacts the triangle, if so return the position
-    void proj_2D_to_3D(const Mesh &head, const int framenum); //project 2D points to the 3D surface
+    void proj_2D_to_3D(const Mesh &head, const int framenum,cv::Mat rmat, cv::Mat tmat); //project 2D points to the 3D surface
     void setframesize(cv::Point2i szin){framesize=szin;}; //sets the internal variable framesize
     
     
@@ -952,14 +954,21 @@ void vis3D::match_keypoints(const Mesh &head)
     
     
     //finding correspondences between the volume and image
+    std::vector<std::thread> threads; //array of threads
     std::cout<<"Calculating correspondences from "<<kp.size()<<" frames"<<std::endl;
      time(&tbegin);
+    pt3D.resize(kp.size()); //resize here due to threading
      for (int i=0; i<kp.size(); i++) {
-     std::cout<<"Corresponding frame "<<i<<std::endl;
-     cv::Rodrigues(rvecs_cal[i], rmat); //convert vector to matrix
-     tvecs_cal[i].copyTo(tmat); //still a vector?
-     proj_2D_to_3D(head,i); //This takes forever!
+         std::cout<<"Corresponding frame "<<i<<std::endl;
+         cv::Rodrigues(rvecs_cal[i], rmat); //convert vector to matrix
+         tvecs_cal[i].copyTo(tmat); //still a vector?
+         //proj_2D_to_3D(head,i); //This takes forever!
+         //proj_2D_to_3D(head, i, tmat,rmat); //threaded version
+         threads.push_back(std::thread(&vis3D::proj_2D_to_3D,*this,head, i, tmat,rmat));
      }
+    for (int i=0;i<kp.size();i++){
+        threads[i].join();
+    }
      time(&tend);
      std::cout<<"all 2D to 3D correspondances took "<<difftime(tend,tbegin)<<" s "<<std::endl;
 
@@ -1013,16 +1022,16 @@ cv::Point3f get_nearest_3D_point(std::vector<cv::Point3f> &points_list, cv::Poin
     }
 }
 
-void vis3D::proj_2D_to_3D(const Mesh &head,const int framenum)
+void vis3D::proj_2D_to_3D(const Mesh &head,const int framenum,cv::Mat tmat_loc, cv::Mat rmat_loc)
 {
-    pt3D.push_back(std::vector<cv::Point3f>());
+    //pt3D.push_back(std::vector<cv::Point3f>()); //moved outide the function to make it paralleizable
     pt3D[framenum].resize(kp[framenum].size(),cv::Point3f(0,0,0));
     int skipctr=0,hitctr=0,missctr=0;
     cv::Point2i ptround;
     time_t tbegin, tend;
     
     //let's try to speed this process up with a dirty probability map
-    cv::Mat precise(framesize.y,framesize.x,CV_32F,0.5), probability(framesize.y,framesize.x,CV_32F,0.5); //initially a 50/50 probability everywhere
+    //cv::Mat precise(framesize.y,framesize.x,CV_32F,0.5), probability(framesize.y,framesize.x,CV_32F,0.5); //initially a 50/50 probability everywhere
     //cv::namedWindow("probability",5); //set up a window
     //std::cout<<"precise size "<<precise.size()<<std::endl;
     
@@ -1030,22 +1039,22 @@ void vis3D::proj_2D_to_3D(const Mesh &head,const int framenum)
     std::cout<<"There are less than "<<kp[framenum].size()<<" points to correspond"<<std::endl;
     for (int i=0; i<kp[framenum].size(); i++) {
         ptround=cv::Point2i(cvRound(kp[framenum][i].pt.x),cvRound(kp[framenum][i].pt.y));
-        if ((i+1)%25==0) { //every 100 searches calculate the new probability
+        /*if ((i+1)%25==0) { //every 100 searches calculate the new probability. ETP commented after moving to threading and improved rejection with Lowe's ratio
             //std::cout<<"calculating the new probability"<<std::endl;
             cv::GaussianBlur(precise, probability, cv::Size(11,11), 2.0,2.0,cv::BORDER_REFLECT);
             //imshow("probability", probability);
             //cv::waitKey(100);
-        }
-        if (validpoint[framenum][i] && probability.at<float>(ptround.y,ptround.x)>=0.5){
+        }*/
+        if (validpoint[framenum][i] ){//&& probability.at<float>(ptround.y,ptround.x)>=0.5){
             std::cout<<"Corresponding point "<<i<<" at "<<kp[framenum][i].pt;
-            validpoint[framenum][i]=backproject2DPoint(&head, kp[framenum][i].pt, pt3D[framenum][i]);
+            validpoint[framenum][i]=backproject2DPoint(&head, kp[framenum][i].pt, pt3D[framenum][i],&tmat_loc,&rmat_loc);
             if (validpoint[framenum][i]) {
                 std::cout<<" hit!"<<std::endl;
-                precise.at<float>(ptround.y,ptround.x)=1.0; //what about rounding? I can't see the opencv website so I'm guessing here
+                //precise.at<float>(ptround.y,ptround.x)=1.0; //what about rounding? I can't see the opencv website so I'm guessing here
                 hitctr++;
             }else{
                 std::cout<<" miss!"<<std::endl;
-                precise.at<float>(ptround.y,ptround.x)=0.0;
+                //precise.at<float>(ptround.y,ptround.x)=0.0;
                 missctr++;
             }
         }else{
@@ -1062,7 +1071,7 @@ void vis3D::proj_2D_to_3D(const Mesh &head,const int framenum)
 
 
 // Back project a 2D point to 3D and returns if it's on the object surface, thanks to Edgar Riba
-bool vis3D::backproject2DPoint(const Mesh *mesh, const cv::Point2f &point2d, cv::Point3f &point3d)
+bool vis3D::backproject2DPoint(const Mesh *mesh, const cv::Point2f &point2d, cv::Point3f &point3d,cv::Mat *tmat_loc, cv::Mat *rmat_loc)
 {
     // Triangles list of the object mesh
     std::vector<std::vector<int> > triangles_list = mesh->getTrianglesList();
@@ -1081,10 +1090,10 @@ bool vis3D::backproject2DPoint(const Mesh *mesh, const cv::Point2f &point2d, cv:
     cv::Mat X_c = cameraMatrix.inv() * point2d_vec ; // 3x1
     
     // Point in world coordinates
-    cv::Mat X_w = rmat.inv() * ( X_c - tmat ); // 3x1
+    cv::Mat X_w = rmat_loc->inv() * ( X_c - *tmat_loc ); // 3x1
     
     // Center of projection
-    cv::Mat C_op = cv::Mat(rmat.inv()).mul(-1) * tvecs; // 3x1
+    cv::Mat C_op = cv::Mat(rmat_loc->inv()).mul(-1) * *tmat_loc; // 3x1
     
     // Ray direction vector
     cv::Mat ray = X_w - C_op; // 3x1
@@ -1295,6 +1304,7 @@ int main(int argc, char* argv[])
     int calframenum=0;
     //int xyloc[2];
     //cv::Point2i xyloc(100,100);
+    unsigned concurentThreadsSupported = std::thread::hardware_concurrency();  //number of possible threads
     Mesh head;                // instantiate Mesh object
     
     //mesh file input and read
@@ -1320,6 +1330,8 @@ int main(int argc, char* argv[])
     //resize the video stream
     //cap.set(CV_CAP_PROP_FRAME_WIDTH,cap.get(CV_CAP_PROP_FRAME_WIDTH)/2);
     //cap.set(CV_CAP_PROP_FRAME_HEIGHT,cap.get(CV_CAP_PROP_FRAME_HEIGHT)/2);
+    
+    std::cout<<"Number of supported threads "<<concurentThreadsSupported<<std::endl;
     
     cv::Mat frame; //create a frame
     cv::Mat frame_raw, frame_court_define;
