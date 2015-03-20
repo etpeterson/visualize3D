@@ -3,6 +3,9 @@
  This is our code to visualize brains on a video of our heads
  
  TODO ETP:
+ 0. CLEAN UP CODE, IT'S A HUGE MESS!!!!
+    b. REJECTION UKNOWN POSES IN DETECTION!
+ 0.5    Set up a unit test so I can test it reliably
  1. Cascade detector improvement
     a. Filter the locations based on how they move around over time?
     b. Maybe also a spatial-temporal filter? Kalman of the head pose?
@@ -36,7 +39,7 @@
  
  
  
- I created the ply file with surfaces in paraview
+ I created the ply file with contours in paraview
  
  
  OPENCV 2D/3D pose with a mesh!
@@ -62,7 +65,7 @@
 
 #include <iostream>
 #include <thread>
-//#include <functional>
+#include <functional>
 #include <opencv2/opencv.hpp>
 #include "opencv2/nonfree/features2d.hpp"
 #include "opencv2/objdetect/objdetect.hpp"
@@ -167,6 +170,7 @@ protected:
     //classifier
     cv::CascadeClassifier face_cascade, eyes_cascade, mouth_cascade, nose_cascade, righteye_cascade, lefteye_cascade, profile_cascade, rightear_cascade, leftear_cascade;
     std::vector<cv::Rect> objects; //all objects detected
+    bool showcascade=false;
     
     
     const std::string cascade_names[9] = {"face_cascade", "eyes_cascade", "mouth_cascade", "nose_cascade", "righteye_cascade", "lefteye_cascade", "profile_cascade", "rightear_cascade", "leftear_cascade"};
@@ -179,6 +183,7 @@ protected:
     cv::SURF surfdet{200,4,2,true,true}; //don't bother with the orientation of the features
     //std::vector<cv::KeyPoint> kp;
     std::vector<std::vector<cv::KeyPoint>> kp; //key points found by surf
+    std::vector<cv::KeyPoint> kp_vec;
     std::vector<std::vector<cv::Point3f>> pt3D; //points corresponding to the key points
     std::vector<std::vector<bool>> validpoint; //true if valid (for whatever reason) false if not
     //cv::Mat desc;
@@ -237,6 +242,8 @@ public:
     bool intersect_ray_triangle(Ray &Ray, Triangle &Triangle, double *out); //find if the ray interacts the triangle, if so return the position
     void proj_2D_to_3D(const Mesh &head, const int framenum,cv::Mat rmat, cv::Mat tmat); //project 2D points to the 3D surface
     void setframesize(cv::Point2i szin){framesize=szin;}; //sets the internal variable framesize
+    void clear_keypoints(); //clear all the keypoint related variables
+    void set_showcascade(bool value); //set the showcascade value to graphically show (true) or not (false) the direct cascade detector results
     
     
     vis3D();
@@ -507,9 +514,11 @@ void vis3D::detect_anatomy(cv::Mat &frame, int framenum)
     
     if(framenum<0){ //if we're not calibrating!
         //volume_points=MRI_points;
+        
         image_points.resize(volume_points.size());
         pts=&image_points;
     }else{ //if we're calibrating
+        volume_points_cal.push_back(volume_points);
         if(image_points_cal.size()<=framenum){ //if it's too small, we need to allocate more!
             image_points_cal.resize(framenum+1);
             image_points_cal[framenum].resize(npoints,cv::Point2f(-1,-1));
@@ -538,7 +547,7 @@ void vis3D::detect_anatomy(cv::Mat &frame, int framenum)
     //something like this
     //what I need to do is to give run_cascade_detector the indicies for image_points_cal for each call and fill it with {-1,-1} here before
     success=run_cascade_detector(face_cascade,frame_gray,*pts,-1,cv::Point2i(0,0)); //detect the face
-    if(framenum>=0){render_objects(frame, "face");}
+    if(showcascade){render_objects(frame, "face");}
     
     /*if(!success){  //once in profile, the other cascades don't do well
         success=run_cascade_detector(profile_cascade,frame,*pts,-1,cv::Point2i(0,0));
@@ -586,30 +595,30 @@ void vis3D::detect_anatomy(cv::Mat &frame, int framenum)
         //std::cout<<"We're looking at a face!"<<std::endl;
         //success=run_cascade_detector(eyes_cascade,frame,pts);
         success=run_cascade_detector(mouth_cascade,frame_mouth,*pts,0,mouth_obj.tl());
-        if(framenum>=0){render_objects(frame, "mouth");}
+        if(showcascade){render_objects(frame, "mouth");}
         success=run_cascade_detector(nose_cascade,frame_nose,*pts,1,nose_obj.tl());
-        if(framenum>=0){render_objects(frame, "nose");}
+        if(showcascade){render_objects(frame, "nose");}
         success=run_cascade_detector(righteye_cascade,frame_right_eye,*pts,2,right_eye_obj.tl());
-        if(framenum>=0){render_objects(frame, "right eye");}
+        if(showcascade){render_objects(frame, "right eye");}
         success=run_cascade_detector(lefteye_cascade,frame_left_eye,*pts,3,left_eye_obj.tl());
-        if(framenum>=0){render_objects(frame, "left eye");}
+        if(showcascade){render_objects(frame, "left eye");}
         success=run_cascade_detector(rightear_cascade,frame_right_ear,*pts,4,right_ear_obj.tl());
-        if(framenum>=0){render_objects(frame, "right ear");}
+        if(showcascade){render_objects(frame, "right ear");}
         success=run_cascade_detector(leftear_cascade,frame_left_ear,*pts,5,left_ear_obj.tl());
-        if(framenum>=0){render_objects(frame, "left ear");}
+        if(showcascade){render_objects(frame, "left ear");}
     }else{ //if we don't find a face (this really doesn't do anything anymore because it doesn't give us enough points to calibrate)
         //note that this is not well done, we could split it up like we did with the face above
         success=run_cascade_detector(profile_cascade,frame,*pts,-1,cv::Point2i(0,0));
-        if(framenum>=0){render_objects(frame, "profile");}
+        if(showcascade){render_objects(frame, "profile");}
         if(success){ //if we found a profile
             cv::Rect face_obj(objects[0]);
             cv::Mat frame_face = frame(objects[0]); //constrain the search to the face only
             //std::cout<<"We're looking at a profile!"<<std::endl;
             success=run_cascade_detector(rightear_cascade,frame_face,*pts,4,face_obj.tl());
-            if(framenum>=0){render_objects(frame, "right ear");}
+            if(showcascade){render_objects(frame, "right ear");}
             if(!success){ //if we didn't find a right ear
                 success=run_cascade_detector(leftear_cascade,frame_face,*pts,5,face_obj.tl());
-                if(framenum>=0){render_objects(frame, "left ear");}
+                if(showcascade){render_objects(frame, "left ear");}
             }
         }
         
@@ -683,10 +692,24 @@ void vis3D::project_points()
 
 void vis3D::find_pose()
 {
-    cv::solvePnP(volume_points, image_points, cameraMatrix, distCoeffs, rvecs, tvecs,true,CV_ITERATIVE);
+    if (image_points.empty()) {
+        std::cout<<"solvePnP using calibration matricies"<<std::endl;
+        //if (rvecs_cal.empty()){ //rvecs_cal.back().at<double>(0,0)!=0) {
+            std::cout<<"pushing rvec"<<std::endl;
+            rvecs_cal.push_back(cv::Mat());
+            tvecs_cal.push_back(cv::Mat());
+        //}
+        cv::solvePnP(volume_points_cal.back(), image_points_cal.back(), cameraMatrix, distCoeffs, rvecs_cal.back(), tvecs_cal.back(),true,CV_ITERATIVE);
+        std::cout<<"rvecs_cal.back() "<<rvecs_cal.back()<<" tvecs_cal.back() "<<tvecs_cal.back()<<std::endl;
+    }else{
+        std::cout<<"solvePnP using working matricies"<<std::endl;
+        cv::solvePnP(volume_points, image_points, cameraMatrix, distCoeffs, rvecs, tvecs,true,CV_ITERATIVE);
+    }
     //std::cout<<"rotation vector "<<std::endl<<rvecs<<std::endl;
     //std::cout<<"translation vector "<<std::endl<<tvecs<<std::endl;
 }
+
+
 
 void vis3D::detect_chessboard(cv::Mat &frame,const int framenum)
 {
@@ -758,8 +781,9 @@ void vis3D::detect_keypoints(cv::Mat frame)
     validpoint.push_back(std::vector<bool>()); //allocate trues later down
     
     //save the pose (which was computed previously!)
-    rvecs_cal.push_back(rvecs);
-    tvecs_cal.push_back(tvecs);
+    //rvecs_cal.push_back(rvecs);
+    //tvecs_cal.push_back(tvecs);
+    //std::cout<<"pushing rvecs and tvecs "<<rvecs<<" "<<tvecs<<std::endl;
     
     //find the foreground
     //mog2(frame,mask);
@@ -821,7 +845,8 @@ void vis3D::render_detected(cv::Mat &frame)
 
 void vis3D::render_matched_detected(cv::Mat &frame) //not actually working
 {
-    cv::Mat frame_new;
+    cv::drawKeypoints(frame, kp_vec, frame);
+    //cv::Mat frame_new;
     //render the detected and matched keypoints from the current and previous frame
     //if (surfmatch.size()>0) { //make sure we have at least 2 frames
     //    cv::drawMatches(frame, kp[kp.size()-1], frame, kp.back(), surfmatch.back(), frame_new);
@@ -956,21 +981,54 @@ void vis3D::match_keypoints(const Mesh &head)
     //finding correspondences between the volume and image
     std::vector<std::thread> threads; //array of threads
     std::cout<<"Calculating correspondences from "<<kp.size()<<" frames"<<std::endl;
+    std::cout<<"Size of rvecs_cal "<<rvecs_cal.size()<<" tvecs_cal "<<tvecs_cal.size()<<std::endl;
+    //why does rvecs_cal apparently have the same thing all the time?!?!?!?!?
+    cv::Mat rmat_int,tvec_int;
      time(&tbegin);
     pt3D.resize(kp.size()); //resize here due to threading
      for (int i=0; i<kp.size(); i++) {
          std::cout<<"Corresponding frame "<<i<<std::endl;
-         cv::Rodrigues(rvecs_cal[i], rmat); //convert vector to matrix
-         tvecs_cal[i].copyTo(tmat); //still a vector?
+         std::cout<<"rvecs_cal["<<i<<"] = "<<rvecs_cal[i]<<" tvecs_cal["<<i<<"] = "<<tvecs_cal[i]<<std::endl;
+         cv::Rodrigues(rvecs_cal[i], rmat_int); //convert vector to matrix
+         tvecs_cal[i].copyTo(tvec_int); //still a vector?
+         std::cout<<"rmat_int = "<<rmat_int<<" tvec_int = "<<tvec_int<<std::endl;
+         //std::this_thread::sleep_for(std::chrono::seconds(1));
          //proj_2D_to_3D(head,i); //This takes forever!
          //proj_2D_to_3D(head, i, tmat,rmat); //threaded version
-         threads.push_back(std::thread(&vis3D::proj_2D_to_3D,*this,head, i, tmat,rmat));
+         //threads.push_back(std::thread(&vis3D::proj_2D_to_3D,*this,head, i, tmat,rmat)); //this seems to call by value, so nothing is saved!
+         threads.push_back(std::thread(&vis3D::proj_2D_to_3D,this,head, i, tvec_int,rmat_int));  //This is pass by reference so we are actually saving everything
+         //std::this_thread::sleep_for(std::chrono::seconds(1));
      }
     for (int i=0;i<kp.size();i++){
         threads[i].join();
     }
      time(&tend);
      std::cout<<"all 2D to 3D correspondances took "<<difftime(tend,tbegin)<<" s "<<std::endl;
+    
+    
+    //just list the valid points found
+    std::cout<<"size kp "<<kp.size()<<" validpoint "<<validpoint.size()<<std::endl;
+    int validctr=0;
+    for (int i=0; i<validpoint.size(); i++) {
+        std::cout<<"size kp "<<kp[i].size()<<" validpoint "<<validpoint[i].size()<<std::endl;
+        for (int j=0; j<validpoint[i].size(); j++) {
+            if(validpoint[i][j]==true){
+                std::cout<<"valid point "<<validctr<<" "<<kp[i][j].pt<<std::endl;
+                validctr++;
+            }
+        }
+    }
+    std::cout<<"Found a total of "<<validctr<<" valid matches from 2D to 3D!"<<std::endl;
+    
+    //flatten kp so we can display all the valid points for sanity checking
+    kp_vec.clear(); //make sure it's empty
+    for (int i=0; i<kp.size(); i++) {
+        for (long j=0; j<kp[i].size(); j++) {
+            if (validpoint[i][j]) {
+                kp_vec.push_back(kp[i][j]);
+            }
+        }
+    }
 
 }
 
@@ -1006,7 +1064,20 @@ cv::Point3f SUB(cv::Point3f v1, cv::Point3f v2)
 // Function to get the nearest 3D point to the Ray origin, thanks to Edgar Riba
 cv::Point3f get_nearest_3D_point(std::vector<cv::Point3f> &points_list, cv::Point3f origin)
 {
-    cv::Point3f p1 = points_list[0];
+    double d=std::numeric_limits<double>::max(),dt;
+    cv::Point3f p_final;
+    for (int i=0; i<points_list.size(); i++) {
+        //dt=std::sqrt( std::pow(points_list[i].x-origin.x, 2) + std::pow(points_list[i].y-origin.y, 2) + std::pow(points_list[i].z-origin.z, 2) );
+        dt=std::pow(points_list[i].x-origin.x, 2) + std::pow(points_list[i].y-origin.y, 2) + std::pow(points_list[i].z-origin.z, 2);  //external sqrt was uneccessary to find min distance
+        if (dt<d) {
+            d=dt;
+            p_final=points_list[i];
+        }
+    }
+    return p_final;
+    
+    //Edgar's original code is below
+    /*cv::Point3f p1 = points_list[0];
     cv::Point3f p2 = points_list[1];
     
     double d1 = std::sqrt( std::pow(p1.x-origin.x, 2) + std::pow(p1.y-origin.y, 2) + std::pow(p1.z-origin.z, 2) );
@@ -1019,7 +1090,7 @@ cv::Point3f get_nearest_3D_point(std::vector<cv::Point3f> &points_list, cv::Poin
     else
     {
         return p2;
-    }
+    }*/
 }
 
 void vis3D::proj_2D_to_3D(const Mesh &head,const int framenum,cv::Mat tmat_loc, cv::Mat rmat_loc)
@@ -1036,7 +1107,8 @@ void vis3D::proj_2D_to_3D(const Mesh &head,const int framenum,cv::Mat tmat_loc, 
     //std::cout<<"precise size "<<precise.size()<<std::endl;
     
     time(&tbegin);
-    std::cout<<"There are less than "<<kp[framenum].size()<<" points to correspond"<<std::endl;
+    std::cout<<"2D to 3D correspondences frame "<<framenum<<", rotation "<<rmat_loc<<", translation "<<tmat_loc<<std::endl;
+    //std::cout<<"There are less than "<<kp[framenum].size()<<" points to correspond"<<std::endl;
     for (int i=0; i<kp[framenum].size(); i++) {
         ptround=cv::Point2i(cvRound(kp[framenum][i].pt.x),cvRound(kp[framenum][i].pt.y));
         /*if ((i+1)%25==0) { //every 100 searches calculate the new probability. ETP commented after moving to threading and improved rejection with Lowe's ratio
@@ -1046,14 +1118,14 @@ void vis3D::proj_2D_to_3D(const Mesh &head,const int framenum,cv::Mat tmat_loc, 
             //cv::waitKey(100);
         }*/
         if (validpoint[framenum][i] ){//&& probability.at<float>(ptround.y,ptround.x)>=0.5){
-            std::cout<<"Corresponding point "<<i<<" at "<<kp[framenum][i].pt;
+            //std::cout<<"Corresponding point "<<i<<" at "<<kp[framenum][i].pt;
             validpoint[framenum][i]=backproject2DPoint(&head, kp[framenum][i].pt, pt3D[framenum][i],&tmat_loc,&rmat_loc);
             if (validpoint[framenum][i]) {
                 std::cout<<" hit!"<<std::endl;
                 //precise.at<float>(ptround.y,ptround.x)=1.0; //what about rounding? I can't see the opencv website so I'm guessing here
                 hitctr++;
             }else{
-                std::cout<<" miss!"<<std::endl;
+                //std::cout<<" miss!"<<std::endl;
                 //precise.at<float>(ptround.y,ptround.x)=0.0;
                 missctr++;
             }
@@ -1125,7 +1197,7 @@ bool vis3D::backproject2DPoint(const Mesh *mesh, const cv::Point2f &point2d, cv:
     // If there are intersection, find the nearest one
     if (!intersections_list.empty())
     {
-        std::cout<<"found "<<intersections_list.size()<<" interactions!"<<std::endl;
+        //std::cout<<"found "<<intersections_list.size()<<" interactions!"<<std::endl;
         point3d = get_nearest_3D_point(intersections_list, R.getP0()); //this only works for 2 points, not many!
         return true;
     }
@@ -1197,6 +1269,22 @@ bool vis3D::intersect_ray_triangle(Ray &Ray, Triangle &Triangle, double *out)
     return false;
 }
 
+void vis3D::clear_keypoints() //clear all the keypoint related variables
+{
+    kp.clear();
+    kp_vec.clear();
+    desc.clear();
+    surfmatch.clear();
+    validpoint.clear();
+    rvecs_cal.clear();
+    tvecs_cal.clear();
+}
+
+void vis3D::set_showcascade(bool value)
+{
+    showcascade=value;
+}
+
 
 
 void bound_rect(cv::Rect &rect, cv::Point2i size)
@@ -1251,8 +1339,13 @@ void help_on_screen(cv::Mat frame,const int flags)
     }else{
         cv::putText(frame, "(f)inding keypoints off", cv::Point2i(5,115),CV_FONT_HERSHEY_PLAIN, 1.0, CV_RGB(0,0,255));
     }
-    cv::putText(frame, "(c)alibrate", cv::Point2i(5,135),CV_FONT_HERSHEY_PLAIN, 1.0, CV_RGB(0,0,255));
-    cv::putText(frame, "(m)atch keypoints", cv::Point2i(5,155), CV_FONT_HERSHEY_PLAIN, 1.0, CV_RGB(0, 0, 255));
+    if (flags&64) {
+        cv::putText(frame, "sho(w) matched keypoints on", cv::Point2i(5,135),CV_FONT_HERSHEY_PLAIN, 1.0, CV_RGB(255,0,0));
+    }else{
+        cv::putText(frame, "sho(w) keypoints off", cv::Point2i(5,135),CV_FONT_HERSHEY_PLAIN, 1.0, CV_RGB(0,0,255));
+    }
+    cv::putText(frame, "(c)alibrate", cv::Point2i(5,155),CV_FONT_HERSHEY_PLAIN, 1.0, CV_RGB(0,0,255));
+    cv::putText(frame, "(m)atch keypoints", cv::Point2i(5,175), CV_FONT_HERSHEY_PLAIN, 1.0, CV_RGB(0, 0, 255));
     //cv::putText(frame, point_names[i], image_points_cal[loc][i],CV_FONT_HERSHEY_PLAIN, 1.0, CV_RGB(0,255,0));
 }
 
@@ -1299,7 +1392,7 @@ int main(int argc, char* argv[])
     //set up some variables
     int keyresponse;
     int waittime=1,helpflags=1;
-    int iscalibrating=0,isvisualizing=0,ischessboardcal=0,isundistorting=0,isdetecting=0;//,ishelp=1;
+    int iscalibrating=0,isvisualizing=0,ischessboardcal=0,isundistorting=0,isdetecting=0,isshowmatched=0;//,ishelp=1;
     //int bgframestart=0, bgframeend=-1;
     int calframenum=0;
     //int xyloc[2];
@@ -1385,11 +1478,13 @@ int main(int argc, char* argv[])
             //waittime=0; //wait forever next time
             if (iscalibrating==0){ //start recording for calibration
                 std::cout<<"Recording for calibration"<<std::endl;
+                vis.set_showcascade(true);
                 iscalibrating=1;
                 helpflags=helpflags^1<<2;
                 vis.setup_calibration(CALIBRATE_FACE); //a little setup so we don't do it a lot in other functions
             }else{ //end calibrating
                 std::cout<<"Ending recodring for calibration"<<std::endl;
+                vis.set_showcascade(false);
                 iscalibrating=0;
                 helpflags=helpflags^1<<2;
                 //vis.camera_calibration(frame.size()); //actually calibrate
@@ -1413,6 +1508,7 @@ int main(int argc, char* argv[])
         }else if(keyresponse=='b'){ //chessboard calibration
             if (ischessboardcal==0) { //start a chessboard calibration
                 std::cout<<"Recording for chessboard calibration"<<std::endl;
+                calframenum=0;
                 ischessboardcal=1;
                 helpflags=helpflags^1<<3;
                 vis.setup_calibration(CALIBRATE_CHESSBOARD); //a little setup so we don't do it a lot in other functions
@@ -1424,17 +1520,31 @@ int main(int argc, char* argv[])
         }else if (keyresponse=='f'){
             if (isdetecting==0) { //turn the point detection on
                 std::cout<<"Recording for keypoint detection"<<std::endl;
+                vis.set_showcascade(true);
+                calframenum=0;
                 isdetecting=1;
                 helpflags=helpflags^1<<5;
                 vis.setup_calibration(CALIBRATE_FACE); //a little setup so we don't do it a lot in other functions
+                vis.clear_keypoints(); //clear the keypoints for the next acquisition
             }else{ //turn point detection off
                 std::cout<<"Recording for keypoint detection"<<std::endl;
+                vis.set_showcascade(false);
                 isdetecting=0;
                 helpflags=helpflags^1<<5;
             }
         }else if (keyresponse=='m'){
             std::cout<<"Matching keypoints to the object"<<std::endl;
             vis.match_keypoints(head);
+        }else if (keyresponse=='w'){
+            if (isshowmatched==0) {
+                std::cout<<"Showing matched keypoints"<<std::endl;
+                isshowmatched=1;
+            }else{
+                std::cout<<"Ending showing matched keypoints"<<std::endl;
+                isshowmatched=0;
+            }
+            helpflags=helpflags^1<<5;
+            
         }
         
         
@@ -1448,7 +1558,7 @@ int main(int argc, char* argv[])
             calframenum++;
         }else if(isvisualizing==1){ //we can't calibrate and visualize at the same time!
             //Eric
-            //Run solvePnP on the current frame
+            //Run solvePnP on the current frame (using cascades!)
             vis.detect_anatomy(frame, -1); //don't give it a frame number because that causes calibration
             vis.find_pose(); //calculate the pose
             vis.project_points(); //using the pose, project the points on the image
@@ -1457,13 +1567,16 @@ int main(int argc, char* argv[])
             vis.detect_chessboard(frame, calframenum);
             calframenum++;
         }else if(isdetecting==1){
-            //detect keypoints on the image
-            vis.detect_anatomy(frame, -1);
+            //detect keypoints on the image (using SURF)
+            vis.detect_anatomy(frame, calframenum);
             vis.find_pose();
-            
             vis.detect_keypoints(frame);
             vis.render_detected(frame);
+            calframenum++;
             //vis.render_matched_detected(frame); //not actually working
+        }else if(isshowmatched==1){
+            //render the detected (using SURF) and matched (are OK and on the 3D volume) keypoints
+            vis.render_matched_detected(frame);
         }
         
         if (isundistorting==1) {
