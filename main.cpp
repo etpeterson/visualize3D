@@ -4,7 +4,7 @@
  
  TODO ETP:
  0. CLEAN UP CODE, IT'S A HUGE MESS!!!!
-    b. REJECTION UKNOWN POSES IN DETECTION!
+    b. REJECTION UKNOWN POSES IN DETECTION! I think this is why I'm getting nans in the rotation/translation!
  0.5    Set up a unit test so I can test it reliably
  1. Cascade detector improvement
     a. Filter the locations based on how they move around over time?
@@ -39,7 +39,7 @@
  
  
  
- I created the ply file with contours in paraview
+ I created the ply file with contours in paraview and meshlab
  
  
  OPENCV 2D/3D pose with a mesh!
