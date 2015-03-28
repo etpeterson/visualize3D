@@ -76,7 +76,9 @@
 //#include <opencv2/objdetect/objdetect.hpp>
 
 //local includes
-#include "Mesh.h"
+#include "Mesh.cpp"
+#include "Utils.cpp"
+#include "CsvReader.cpp"
 
 //#include "featureroi.h"
 
