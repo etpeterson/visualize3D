@@ -60,34 +60,6 @@
  OpenCV documentation about matching and features
  http://docs.opencv.org/trunk/doc/py_tutorials/py_feature2d/py_table_of_contents_feature2d/py_table_of_contents_feature2d.html
  
- 
- 
- 
- Code cleanup time!
- The single class is just getting too broad and cluttered. By splitting it up there may be some code duplication, but it should make it much cleaner and nicer!
- New class setup
- 1. Camera calibration class
-    a. By default initializes the camera matrix and distortion coefficients along with tvec and rvec. The idea is that this is used to set the processing parameters
-    b. Chessboard calibration subclass
-    c. Face calibration subclass (also subclass of Cascade detector)
- 2. Cascade detector class (maybe to be removed once we have fixed calibration poses?)
-    a. Contains all the functions for cascade detection
-    b. Show face location and detection results
- 3. Keypoint detecting and cleaning
-    a. Handles all the keypoint detection using SURF
- 4. Correspondance calculation - subclass of keypoint detecting (maybe a subclass of Pose detection?)
-    a. Detects keypoints and matches them with locations on the surface of the object
- 5. Pose detection - subclass of keypoint detecting
-    a. Uses keypoints to detect the pose
-    b. Dynamically maintains a database of good keypoints to use for pose detection
- 6. Visualization functions
-    a. Display the volume on the image
-    b. Display the face cascade detector output
-    c. Display the keypoints detected
-
- 
- 
- 
  */
 
 
