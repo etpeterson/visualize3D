@@ -4,7 +4,6 @@
  
  TODO ETP:
  0. CLEAN UP CODE, IT'S A HUGE MESS!!!!
-    b. REJECTION UKNOWN POSES IN DETECTION! I think this is why I'm getting nans in the rotation/translation!
  0.5    Set up a unit test so I can test it reliably
  1. Cascade detector improvement
     a. Filter the locations based on how they move around over time?
@@ -892,9 +891,19 @@ void vis3D::match_keypoints(const Mesh &head)
     
     //start by assuming all points are valid
     
-    
-    
-    
+    //then we need to remove everything that's in a frame where the face wasn't detected
+    std::cout<<"rvecs_cal.size()="<<rvecs_cal.size()<<std::endl;
+    for (long i=rvecs_cal.size()-1; i>=0; i--) { //does this actually work? It will be removed anyway...
+        if(isnan(rvecs_cal[i].at<double>(0))){
+            std::cout<<"removing frame "<<i<<std::endl;
+            rvecs_cal.erase(rvecs_cal.begin()+i);
+            tvecs_cal.erase(tvecs_cal.begin()+i);
+            desc.erase(desc.begin()+i);
+            kp.erase(kp.begin()+i);
+        }
+        std::cout<<"rvecs_cal["<<i<<"]="<<rvecs_cal[i]<<std::endl;
+    }
+
     
     //matching the points between all frames using a radiusMatch to return all matches less than a specified distance
     std::cout<<"Matching a total of "<<desc.size()<<" frames"<<std::endl;
