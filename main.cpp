@@ -79,10 +79,11 @@
  5. Pose detection - subclass of keypoint detecting
     a. Uses keypoints to detect the pose
     b. Dynamically maintains a database of good keypoints to use for pose detection
- 6. Visualization functions
+ 6. Visualization class
     a. Display the volume on the image
     b. Display the face cascade detector output
     c. Display the keypoints detected
+    d. Display help
 
  
  
@@ -171,8 +172,72 @@ void image_callback(int event, int x, int y, int flags, void* image)
 
 
 
+//the camera calibration class
+class camera_calibrator {
+protected:
+    std::vector< std::vector<cv::Point2f> > image_points_cal; //must be floats otherwise we get strange issues from
+    std::vector< std::vector<cv::Point3f> > volume_points_cal; //all the court verticies in actual locations (filled in camera_calibration)
 
-//the squash court class
+    //camera section
+    cv::Mat cameraMatrix;
+    cv::Mat distCoeffs;
+    std::vector<cv::Mat> rvecs_cal, tvecs_cal;
+    cv::Mat rvecs, tvecs;
+    cv::Mat rmat, tmat;
+    double rms;
+    
+public:
+    void setup_camera_matrix(cv::Point2i); //camera calibration helper function
+    void setup_rvec(); //camera calibration helper function
+    void setup_tvec(); //camera calibration helper function
+    void camera_calibration(cv::Point2i); //camera calibration helper function
+    
+    //void setup_calibration(int caltype); NEEDS TO GO INTO BOTH SUBCLASSES //set the variables correctly for calibrating with either a face or a chessboard
+    
+    camera_calibrator();
+
+};
+
+class face_calibrator:camera_calibrator{ //also needs the cascade detector class!
+protected:
+    std::vector<cv::Point3f> volume_points; // = {cv::Point3f(0.0,-118.0,-120.0),cv::Point3f(4.0,-130.0,-85.0),cv::Point3f(-25.0,-95.0,-50.0),cv::Point3f(30.0,-95.0,-50.0),cv::Point3f(-70.0,-5.0,-70.0),cv::Point3f(-70,0.0,-75.0)}; //points in the volume in mm
+    std::vector<cv::Point3f> MRI_points = {cv::Point3f(0.0,-118.0,-120.0),cv::Point3f(4.0,-130.0,-85.0),cv::Point3f(-25.0,-95.0,-50.0),cv::Point3f(30.0,-95.0,-50.0),cv::Point3f(-70.0,-5.0,-70.0),cv::Point3f(-70,0.0,-75.0)}; //points in the volume in mm
+};
+
+class chessboard_calibrator: camera_calibrator{
+protected:
+    std::vector<cv::Point3f> chessboard_points; //chessboard points in mm
+    //chessboard
+    cv::Size2i board_size = cv::Size2i(9,6); //9x6 grid
+    float square_size = 23.7; //mm IS THIS CORRECT?
+    
+public:
+    void detect_chessboard(cv::Mat &frame, int framenum); //detect the chessboard features
+    
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//below is the original code and above are the replacement classes
+
+
+//the monster class
 class vis3D {
 protected:
     //points
