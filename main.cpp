@@ -65,18 +65,18 @@
  Code cleanup time!
  The single class is just getting too broad and cluttered. By splitting it up there may be some code duplication, but it should make it much cleaner and nicer!
  New class setup
- 1. Camera calibration class
+ 1. Camera calibration class (tentative class structure set)
     a. By default initializes the camera matrix and distortion coefficients along with tvec and rvec. The idea is that this is used to set the processing parameters
     b. Chessboard calibration subclass
     c. Face calibration subclass (also subclass of Cascade detector)
- 2. Cascade detector class (maybe to be removed once we have fixed calibration poses?)
+ 2. Cascade detector class (maybe to be removed once we have fixed calibration poses?) (tentative class structure set)
     a. Contains all the functions for cascade detection
     b. Show face location and detection results
- 3. Keypoint detecting and cleaning
+ 3. Keypoint detecting and cleaning (combine with pose detection!)
     a. Handles all the keypoint detection using SURF
  4. Correspondance calculation - subclass of keypoint detecting (maybe a subclass of Pose detection?)
     a. Detects keypoints and matches them with locations on the surface of the object
- 5. Pose detection - subclass of keypoint detecting
+ 5. Pose detection - subclass of keypoint detecting (tentative class structure set)
     a. Uses keypoints to detect the pose
     b. Dynamically maintains a database of good keypoints to use for pose detection
  6. Visualization class
@@ -172,7 +172,34 @@ void image_callback(int event, int x, int y, int flags, void* image)
 
 
 
-//the camera calibration class
+struct corrs{ //a structure to hold information about matching locations in the video
+    std::vector<cv::Point3f> volume_point;
+    std::vector<cv::KeyPoint> kp;
+    std::vector<cv::Mat> desc;
+};
+
+
+//the cascade detector class. the class to detect faces and selected locations on faces
+class cascade_detector{
+protected:
+    //classifier
+    cv::CascadeClassifier face_cascade, eyes_cascade, mouth_cascade, nose_cascade, righteye_cascade, lefteye_cascade, profile_cascade, rightear_cascade, leftear_cascade;
+    std::vector<cv::Rect> objects; //all objects detected
+    bool showcascade=false;
+    
+    
+    const std::string cascade_names[9] = {"face_cascade", "eyes_cascade", "mouth_cascade", "nose_cascade", "righteye_cascade", "lefteye_cascade", "profile_cascade", "rightear_cascade", "leftear_cascade"};
+    const std::string point_names[6] = {"mouth_cascade", "nose_cascade", "righteye_cascade", "lefteye_cascade", "rightear_cascade", "leftear_cascade"}; //are there any more cascades?
+    
+    bool run_cascade_detector(cv::CascadeClassifier,cv::Mat &, std::vector<cv::Point2f> &, int,cv::Point2i); //a helper function for the cascade detection
+    
+public:
+    void detect_anatomy(cv::Mat &, int); //detect anatomy using cascade detectors
+    void find_pose(); //find the rotation and translation vectors based on the object and image points
+    
+};
+
+//the camera calibration class. the base camera calibration class
 class camera_calibrator {
 protected:
     std::vector< std::vector<cv::Point2f> > image_points_cal; //must be floats otherwise we get strange issues from
@@ -192,19 +219,27 @@ public:
     void setup_tvec(); //camera calibration helper function
     void camera_calibration(cv::Point2i); //camera calibration helper function
     
+    //new functions!
+    cv::Mat get_cameraMatrix(); //return the camera matrix
+    cv::Mat get_distCoeffs(); //return the distortion coefficients
+    std::vector<cv::Mat> get_rvecs(); //return the rotation vectors
+    std::vector<cv::Mat> get_tvecs(); //return the translation vectors
+    
     //void setup_calibration(int caltype); NEEDS TO GO INTO BOTH SUBCLASSES //set the variables correctly for calibrating with either a face or a chessboard
     
     camera_calibrator();
 
 };
 
-class face_calibrator:camera_calibrator{ //also needs the cascade detector class!
+//the face calibration class. calibrate the camera from a face
+class face_calibrator: private camera_calibrator, private cascade_detector{ //also needs the cascade detector class!
 protected:
     std::vector<cv::Point3f> volume_points; // = {cv::Point3f(0.0,-118.0,-120.0),cv::Point3f(4.0,-130.0,-85.0),cv::Point3f(-25.0,-95.0,-50.0),cv::Point3f(30.0,-95.0,-50.0),cv::Point3f(-70.0,-5.0,-70.0),cv::Point3f(-70,0.0,-75.0)}; //points in the volume in mm
     std::vector<cv::Point3f> MRI_points = {cv::Point3f(0.0,-118.0,-120.0),cv::Point3f(4.0,-130.0,-85.0),cv::Point3f(-25.0,-95.0,-50.0),cv::Point3f(30.0,-95.0,-50.0),cv::Point3f(-70.0,-5.0,-70.0),cv::Point3f(-70,0.0,-75.0)}; //points in the volume in mm
 };
 
-class chessboard_calibrator: camera_calibrator{
+//the chessboard calibration class. the class that calibrates the camera from a chessboard
+class chessboard_calibrator: private camera_calibrator{
 protected:
     std::vector<cv::Point3f> chessboard_points; //chessboard points in mm
     //chessboard
@@ -216,12 +251,88 @@ public:
     
 };
 
+//the pose detection class. this class handles keypoints and head poses
+class pose_detection{
+protected:
+    std::vector<cv::Point2f> image_points;
+    std::vector<cv::Point3f> volume_points;
+    
+    //feature detection
+    cv::SURF surfdet{200,4,2,true,true}; //don't bother with the orientation of the features
+    std::vector<std::vector<cv::KeyPoint>> kp; //key points found by surf
+    std::vector<cv::KeyPoint> kp_vec;
+    std::vector<std::vector<cv::Point3f>> pt3D; //points corresponding to the key points
+    std::vector<std::vector<bool>> validpoint; //true if valid (for whatever reason) false if not
+    std::vector<cv::Mat> desc;
+    cv::BFMatcher bfmatch{cv::NORM_L1,false}; //brute force matcher
+    std::vector<std::vector<std::vector<cv::DMatch>>> surfmatch;
+    
+    //camera stuff
+    cv::Mat frame;
+    cv::Mat cameraMatrix;
+    cv::Mat distCoeffs;
+    cv::Mat rvecs, tvecs;
+    
+    struct corrs; //a structure to hold information about matching locations in the video
+
+    
+public:
+    void find_pose(); //find the rotation and translation vectors based on the object and image points
+    void detect_keypoints(cv::Mat frame); //find the keypoints in the frame
+    void match_keypoints(const Mesh &head); //filter the image keypoints and match them to the object
+
+    
+    //NEW functions
+    void set_cameraMatrix(cv::Mat);
+    void set_distCoeffs(cv::Mat);
+    void set_frame(cv::Mat);
+    
+};
 
 
+class calculate_2D_3D_correspondence: private pose_detection{
+protected:
+    std::vector< std::vector<cv::Point2f> > image_points_cal; //must be floats otherwise we get strange issues from
+    std::vector< std::vector<cv::Point3f> > volume_points_cal; //all the court verticies in actual locations (filled in camera_calibration)
+    
+    //camera stuff
+    cv::Mat frame;
+    cv::Mat cameraMatrix;
+    cv::Mat distCoeffs;
+    cv::Mat rvecs, tvecs;
+    
+    struct corrs; //a structure to hold information about matching locations in the video
+    
+public:
+    void match_keypoints(const Mesh &head); //filter the image keypoints and match them to the object
+    bool backproject2DPoint(const Mesh *mesh, const cv::Point2f &point2d, cv::Point3f &point3d,cv::Mat *rmat, cv::Mat *tmat); //find if a point on the displayed image intersects the mesh at any point
+    bool intersect_ray_triangle(Ray &Ray, Triangle &Triangle, double *out); //find if the ray interacts the triangle, if so return the position
+    void proj_2D_to_3D(const Mesh &head, const int framenum,cv::Mat rmat, cv::Mat tmat); //project 2D points to the 3D surface
+    
+    //new functions
+    void get_2D_3D_matches();
+};
 
 
+class visualize{
+protected:
+    //camera section
+    cv::Mat cameraMatrix;
+    cv::Mat distCoeffs;
+    std::vector<cv::Mat> rvecs_cal, tvecs_cal;
+    cv::Mat rvecs, tvecs;
+    cv::Mat rmat, tmat;
+    
+public:
+    void render_detected(cv::Mat &frame); //draw the detected points on the frame
+    void render_matched_detected(cv::Mat &frame); //draw the detected and matched points on the frames
+    void render_image_points_cal(cv::Mat &,int); //draw image_points_cal on an image
+    void render_image_points(cv::Mat &); //draw image_points on an image
+    void render_objects(cv::Mat &,std::string); //draw all the detected objects on the given frame
+    void undistort_frame(cv::Mat &frame); //undistort the output image
 
-
+    
+};
 
 
 
