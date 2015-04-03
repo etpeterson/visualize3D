@@ -178,6 +178,20 @@ struct corrs{ //a structure to hold information about matching locations in the 
     std::vector<cv::Mat> desc;
 };
 
+class camera{ //a structure to hold camera information
+protected:
+    cv::Mat frame;
+    cv::Mat cameraMatrix;
+    cv::Mat distCoeffs;
+    cv::Mat rvecs, tvecs;
+    
+public:
+    cv::Mat get_cameraMatrix(); //return the camera matrix
+    cv::Mat get_distCoeffs(); //return the distortion coefficients
+    std::vector<cv::Mat> get_rvecs(); //return the rotation
+    std::vector<cv::Mat> get_tvecs(); //return the translation
+};
+
 
 //the cascade detector class. the class to detect faces and selected locations on faces
 class cascade_detector{
@@ -200,16 +214,16 @@ public:
 };
 
 //the camera calibration class. the base camera calibration class
-class camera_calibrator {
+class camera_calibrator : private camera{
 protected:
     std::vector< std::vector<cv::Point2f> > image_points_cal; //must be floats otherwise we get strange issues from
     std::vector< std::vector<cv::Point3f> > volume_points_cal; //all the court verticies in actual locations (filled in camera_calibration)
 
     //camera section
-    cv::Mat cameraMatrix;
-    cv::Mat distCoeffs;
+    //cv::Mat cameraMatrix;
+    //cv::Mat distCoeffs;
     std::vector<cv::Mat> rvecs_cal, tvecs_cal;
-    cv::Mat rvecs, tvecs;
+    //cv::Mat rvecs, tvecs;
     cv::Mat rmat, tmat;
     double rms;
     
@@ -220,10 +234,10 @@ public:
     void camera_calibration(cv::Point2i); //camera calibration helper function
     
     //new functions!
-    cv::Mat get_cameraMatrix(); //return the camera matrix
-    cv::Mat get_distCoeffs(); //return the distortion coefficients
-    std::vector<cv::Mat> get_rvecs(); //return the rotation vectors
-    std::vector<cv::Mat> get_tvecs(); //return the translation vectors
+    //cv::Mat get_cameraMatrix(); //return the camera matrix
+    //cv::Mat get_distCoeffs(); //return the distortion coefficients
+    //std::vector<cv::Mat> get_rvecs(); //return the rotation vectors
+    //std::vector<cv::Mat> get_tvecs(); //return the translation vectors
     
     //void setup_calibration(int caltype); NEEDS TO GO INTO BOTH SUBCLASSES //set the variables correctly for calibrating with either a face or a chessboard
     
@@ -252,7 +266,7 @@ public:
 };
 
 //the pose detection class. this class handles keypoints and head poses
-class pose_detection{
+class pose_detection: private camera{
 protected:
     std::vector<cv::Point2f> image_points;
     std::vector<cv::Point3f> volume_points;
@@ -268,10 +282,10 @@ protected:
     std::vector<std::vector<std::vector<cv::DMatch>>> surfmatch;
     
     //camera stuff
-    cv::Mat frame;
-    cv::Mat cameraMatrix;
-    cv::Mat distCoeffs;
-    cv::Mat rvecs, tvecs;
+    //cv::Mat frame;
+    //cv::Mat cameraMatrix;
+    //cv::Mat distCoeffs;
+    //cv::Mat rvecs, tvecs;
     
     struct corrs; //a structure to hold information about matching locations in the video
 
@@ -290,16 +304,16 @@ public:
 };
 
 
-class calculate_2D_3D_correspondence: private pose_detection{
+class calculate_2D_3D_correspondence: private pose_detection, private camera{
 protected:
     std::vector< std::vector<cv::Point2f> > image_points_cal; //must be floats otherwise we get strange issues from
     std::vector< std::vector<cv::Point3f> > volume_points_cal; //all the court verticies in actual locations (filled in camera_calibration)
     
     //camera stuff
-    cv::Mat frame;
-    cv::Mat cameraMatrix;
-    cv::Mat distCoeffs;
-    cv::Mat rvecs, tvecs;
+    //cv::Mat frame;
+    //cv::Mat cameraMatrix;
+    //cv::Mat distCoeffs;
+    //cv::Mat rvecs, tvecs;
     
     struct corrs; //a structure to hold information about matching locations in the video
     
@@ -314,14 +328,14 @@ public:
 };
 
 
-class visualize{
+class visualize: private camera{
 protected:
     //camera section
-    cv::Mat cameraMatrix;
-    cv::Mat distCoeffs;
-    std::vector<cv::Mat> rvecs_cal, tvecs_cal;
-    cv::Mat rvecs, tvecs;
-    cv::Mat rmat, tmat;
+    //cv::Mat cameraMatrix;
+    //cv::Mat distCoeffs;
+    //std::vector<cv::Mat> rvecs_cal, tvecs_cal;
+    //cv::Mat rvecs, tvecs;
+    //cv::Mat rmat, tmat;
     
 public:
     void render_detected(cv::Mat &frame); //draw the detected points on the frame
