@@ -84,6 +84,18 @@
     b. Display the face cascade detector output
     c. Display the keypoints detected
     d. Display help
+ 
+ 
+ 
+ Code cleanup todo
+ This is the order of operations for this cleanup/rewrite
+ 1. pose_detection
+    a. find points and pose for a single frame
+    b. Won't totally be completed until point 2 is done
+ 2. calculate_2D_3D_correspondence
+    a. relies heavily on part 1
+ 3. chessboard_calibrator
+    a. drives camera_calibrator
 
  
  
@@ -183,21 +195,37 @@ struct point_definitions{ //a structure (or maybe class?) to hold information ab
 
 class camera{ //a class to handle camera information
 protected:
+    double focal_length ;  //focal length
+    cv::Point2f sensor_size; //sensor size
     cv::Mat frame;
     cv::Mat cameraMatrix;
     cv::Mat distCoeffs;
-    cv::Mat rvecs, tvecs;
+    cv::Mat rvec, tvec;
     
 public:
+    void set_frame(const cv::Mat &frame_in);
+    void set_camera_parameters(const double f,const cv::Point2i s); //set the focal length and sensor size
+    void set_cameraMatrix(); //set the camera matrix from the focal length and sensor size
+    void set_cameraMatrix(const cv::Mat &cameraMatrix); //set the camera matrix manually
+    void set_rvec(); //set the rvec automatically from a guess
+    void set_rvec(const cv::Mat &rvec); //set the rvec directly
+    void set_tvec(); //set the tvec from a guess
+    void set_tvec(const cv::Mat &tvec); //set the tvec from a matrix
+    
+    /*
     cv::Mat get_cameraMatrix(); //return the camera matrix
     cv::Mat get_distCoeffs(); //return the distortion coefficients
     std::vector<cv::Mat> get_rvecs(); //return the rotation
     std::vector<cv::Mat> get_tvecs(); //return the translation
+    */
+    
+    camera(); //constructor
 };
 
 
 //the cascade detector class. the class to detect faces and selected locations on faces
-class cascade_detector{
+//this will become outdated with the new static position calibration
+/*class cascade_detector{
 protected:
     //classifier
     cv::CascadeClassifier face_cascade, eyes_cascade, mouth_cascade, nose_cascade, righteye_cascade, lefteye_cascade, profile_cascade, rightear_cascade, leftear_cascade;
@@ -214,7 +242,7 @@ public:
     void detect_anatomy(cv::Mat &, int); //detect anatomy using cascade detectors
     void find_pose(); //find the rotation and translation vectors based on the object and image points
     
-};
+};*/
 
 //the camera calibration class. the base camera calibration class
 class camera_calibrator : private camera{
@@ -249,11 +277,12 @@ public:
 };
 
 //the face calibration class. calibrate the camera from a face
-class face_calibrator: private camera_calibrator, private cascade_detector{ //also needs the cascade detector class!
+//this is not the best way to calibrate the camera, I need to make the chessboard work!
+/*class face_calibrator: private camera_calibrator, private cascade_detector{ //also needs the cascade detector class!
 protected:
     std::vector<cv::Point3f> volume_points; // = {cv::Point3f(0.0,-118.0,-120.0),cv::Point3f(4.0,-130.0,-85.0),cv::Point3f(-25.0,-95.0,-50.0),cv::Point3f(30.0,-95.0,-50.0),cv::Point3f(-70.0,-5.0,-70.0),cv::Point3f(-70,0.0,-75.0)}; //points in the volume in mm
     std::vector<cv::Point3f> MRI_points = {cv::Point3f(0.0,-118.0,-120.0),cv::Point3f(4.0,-130.0,-85.0),cv::Point3f(-25.0,-95.0,-50.0),cv::Point3f(30.0,-95.0,-50.0),cv::Point3f(-70.0,-5.0,-70.0),cv::Point3f(-70,0.0,-75.0)}; //points in the volume in mm
-};
+};*/
 
 //the chessboard calibration class. the class that calibrates the camera from a chessboard
 class chessboard_calibrator: private camera_calibrator{
@@ -331,8 +360,8 @@ public:
     void get_2D_3D_matches();
 };
 
-
-class visualize: private camera{
+//this class is a standalone class for visualizing the data
+class visualize{
 protected:
     int help_options=1;
     bool help=true;
@@ -352,6 +381,83 @@ public:
 
     visualize(String name_in);
 };
+
+
+
+camera::camera() //default camera constructor, just initialze some
+{
+    focal_length = 0.5; // focal length in mm (0.25 seems about right?)
+    sensor_size = cv::Point2f(2.4,1.8);             // sensor size in mm (full frame is 36x24, but this one is 1/4"?)
+    cameraMatrix = cv::Mat::eye(3, 3, CV_64F); //we need to tweak this later once the image size is known
+    distCoeffs = cv::Mat::zeros(5, 1, CV_64F); //only a 5 parameter fit
+    rvec = cv::Mat::zeros(3, 1, CV_64F); //Try initializing zeros
+    tvec = cv::Mat::zeros(3, 1, CV_64F); //Try initializing zeros and fill in later
+}
+
+void camera::set_frame(const cv::Mat &frame_in)
+{
+    //just copy the frame over
+    frame_in.copyTo(frame);
+}
+
+void camera::set_camera_parameters(const double f,const cv::Point2i s)
+{
+    focal_length=f;
+    sensor_size.x=s.x; sensor_size.y=s.y;
+}
+
+
+void camera::set_cameraMatrix(const cv::Mat &cmat)
+{
+    //just a simple copy
+    cmat.copyTo(cameraMatrix);
+}
+
+void camera::set_cameraMatrix() //should I pass by reference?
+{
+    //double f = 0.5; // focal length in mm (0.25 seems about right?)
+    //double sx = 2.4, sy = 1.8;             // sensor size in mm (full frame is 36x24, but this one is 1/4"?)
+    std::cout<<"Setting up the camera matrix vector from size "<<frame.size()<<" cam size "<<sensor_size<<" focal length "<<focal_length<<std::endl;
+    cameraMatrix.at<double>(0,2)=static_cast<double>(frame.size().width)/2.0; //finish setting the cameraMatrix because calibrateCamera can't do it for me
+    cameraMatrix.at<double>(1,2)=static_cast<double>(frame.size().height)/2.0;  //finish setting cameraMatrix
+    cameraMatrix.at<double>(0,0)=static_cast<double>(frame.size().width)*focal_length/sensor_size.x; //fx
+    cameraMatrix.at<double>(1,1)=static_cast<double>(frame.size().height)*focal_length/sensor_size.y; //fy
+    std::cout<<"camera matrix"<<std::endl<<cameraMatrix<<std::endl;  //this doesn't seem to change
+}
+
+void camera::set_tvec(const cv::Mat &tv)
+{
+    //just copy the tvec
+    tv.copyTo(tvec);
+}
+
+void camera::set_tvec()
+{
+    //set up the tvec
+    std::cout<<"Setting up the translation vector"<<std::endl;
+    //think of these translations as happening to the court, not the camera!
+    tvec.at<double>(0)=0.0; //3cm in x (centered)
+    tvec.at<double>(1)=115.0; //4cm down (maybe)
+    tvec.at<double>(2)=-45.0; //16.5cm back (maybe)
+    std::cout<<"translation vectors"<<std::endl<<tvec<<std::endl;
+}
+
+void camera::set_rvec()
+{
+    //set up the rvec
+    std::cout<<"Setting up the rotation vector"<<std::endl;
+    rvec.at<double>(0)=0.25; //not sure what this is
+    rvec.at<double>(1)=2.0; //not sure what this is
+    rvec.at<double>(2)=2.0; //not sure what this is
+    std::cout<<"rotation vector"<<std::endl<<rvec<<std::endl;
+}
+
+void camera::set_rvec(const cv::Mat &rv)
+{
+    //just copy the rvec
+    rv.copyTo(rvec);
+}
+
 
 
 
@@ -403,6 +509,12 @@ int main(int argc, char* argv[])
     //set up some variables
     int keyresponse=-1;
     
+    //how to initialize vectors in 1D and 2D
+    /*std::vector<std::vector<double>> vectest(2,vector<double>(2));
+    std::vector<std::vector<double>> vectest2 = {{1,2},{3,4}};
+    std::vector<double> vec = {1,2};*/
+
+    
     if (argc<2) {
         std::cout<<"No input mesh file specified!"<<std::endl;
     }else{
@@ -421,6 +533,19 @@ int main(int argc, char* argv[])
     cv::Mat frame; //create a frame
     //cv::namedWindow("frame",1); //create the window
     
+    /* test the camera class
+    //instantiate the camera class
+    camera cam;
+    cap.read(frame); //read the frame
+    cam.set_frame(frame); //set the camera frame
+    //cam.set_camera_parameters(); //not needed because those are hardcoded
+     //set_cameraMatrix, set_rvec, set_tvec are done only once
+    cam.set_cameraMatrix(); //set the camera matrix from the focal length and sensor size
+    cam.set_rvec(); //set the rvec automatically from a guess
+    cam.set_tvec(); //set the tvec from a guess
+     */
+    
+    
     visualize window("frame"); //instantiate the visualizer class
     
     while(cap.isOpened() && keyresponse!='q'){ //to keep things simple, let's just have this as the calibration loop
@@ -434,6 +559,7 @@ int main(int argc, char* argv[])
                 window.toggle_help(); break;
                 
         }
+        std::cout<<frame.size().width<<" "<<frame.size().height<<std::endl;
         
         //do the processing for this loop
         cap.read(frame); //read the frame
