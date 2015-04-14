@@ -188,9 +188,9 @@ void image_callback(int event, int x, int y, int flags, void* image)
 
 
 struct point_definitions{ //a structure (or maybe class?) to hold information about matching locations in the video
-    std::vector<cv::Point3f> volume_point;
-    std::vector<cv::KeyPoint> kp;
-    std::vector<cv::Mat> desc;
+    std::vector<std::vector<cv::Point3f>> volume_points;
+    std::vector<std::vector<cv::KeyPoint>> key_points;
+    std::vector<cv::Mat> descriptors;
 };
 
 class camera{ //a class to handle camera information
@@ -245,7 +245,7 @@ public:
 };*/
 
 //the camera calibration class. the base camera calibration class
-class camera_calibrator : private camera{
+class camera_calibrator : protected camera{
 protected:
     std::vector< std::vector<cv::Point2f> > image_points_cal; //must be floats otherwise we get strange issues from
     std::vector< std::vector<cv::Point3f> > volume_points_cal; //all the court verticies in actual locations (filled in camera_calibration)
@@ -285,7 +285,7 @@ protected:
 };*/
 
 //the chessboard calibration class. the class that calibrates the camera from a chessboard
-class chessboard_calibrator: private camera_calibrator{
+class chessboard_calibrator: protected camera_calibrator{
 protected:
     std::vector<cv::Point3f> chessboard_points; //chessboard points in mm
     //chessboard
@@ -298,20 +298,21 @@ public:
 };
 
 //the pose detection class. this class handles keypoints and head poses
-class pose_detection: private camera{
+class pose_detection: public camera{
 protected:
-    std::vector<cv::Point2f> image_points;
-    std::vector<cv::Point3f> volume_points;
+    std::vector<cv::Point2f> image_points; //the good points on the image for this frame
+    std::vector<cv::Point3f> volume_points; //the good points on the volume for this frame
     
     //feature detection
     cv::SURF surfdet{200,4,2,true,true}; //don't bother with the orientation of the features
-    std::vector<std::vector<cv::KeyPoint>> kp; //key points found by surf
-    std::vector<cv::KeyPoint> kp_vec;
-    std::vector<std::vector<cv::Point3f>> pt3D; //points corresponding to the key points
-    std::vector<std::vector<bool>> validpoint; //true if valid (for whatever reason) false if not
-    std::vector<cv::Mat> desc;
+    std::vector<cv::KeyPoint> kp; //key points found by surf
+    //std::vector<cv::KeyPoint> kp_vec;
+    //std::vector<std::vector<cv::Point3f>> pt3D; //points corresponding to the key points
+    //std::vector<std::vector<bool>> validpoint; //true if valid (for whatever reason) false if not
+    cv::Mat desc;
     cv::BFMatcher bfmatch{cv::NORM_L1,false}; //brute force matcher
-    std::vector<std::vector<std::vector<cv::DMatch>>> surfmatch;
+    std::vector<cv::DMatch> surfmatch;
+    int nmatches=2; //number of matches to look for
     
     //camera stuff
     //cv::Mat frame;
@@ -319,19 +320,29 @@ protected:
     //cv::Mat distCoeffs;
     //cv::Mat rvecs, tvecs;
     
-    struct point_definitions; //a structure to hold information about matching locations in the video
+    point_definitions ptdef; //a structure to hold information about matching locations in the video
+    //this probably will need to become a vector of all of these!
+    /*struct point_definitions{ //a structure (or maybe class?) to hold information about matching locations in the video
+     std::vector<cv::Point3f> volume_point;
+     std::vector<cv::KeyPoint> kp;
+     std::vector<cv::Mat> desc;
+     };*/
 
     
 public:
+    void set_volume_points(const point_definitions ptdef); //initialize the volume points from a vector
+    void set_volume_points(); //just initialize the basics like eyes, but this is basically useless!
+    
     void find_pose(); //find the rotation and translation vectors based on the object and image points
-    void detect_keypoints(cv::Mat frame); //find the keypoints in the frame
-    //void match_keypoints(const Mesh &head); //filter the image keypoints and match them to the object
+    void clean_keypoints(); //clean the keypoints so we think they're all valid
+    void detect_keypoints_knn(); //find the keypoints in the frame
+    
 
     
     //NEW functions
-    void set_cameraMatrix(cv::Mat);
-    void set_distCoeffs(cv::Mat);
-    void set_frame(cv::Mat);
+    //void set_cameraMatrix(cv::Mat);
+    //void set_distCoeffs(cv::Mat);
+    //void set_frame(cv::Mat);
     
 };
 
@@ -460,6 +471,64 @@ void camera::set_rvec(const cv::Mat &rv)
 
 
 
+void pose_detection::find_pose()
+{
+    cv::solvePnP(volume_points, image_points, cameraMatrix, distCoeffs, rvec, tvec,true,CV_ITERATIVE);
+    std::cout<<"rotation vector "<<std::endl<<rvec<<std::endl;
+    std::cout<<"translation vector "<<std::endl<<tvec<<std::endl;
+}
+
+void pose_detection::set_volume_points(const point_definitions ptdef_in)
+{
+    //just copy what was provided (assume mm)
+    ptdef.volume_points=ptdef_in.volume_points;
+    ptdef.key_points=ptdef_in.key_points;
+    for (int i=0; i<ptdef_in.descriptors.size(); i++) {
+        ptdef_in.descriptors[i].copyTo(ptdef.descriptors[i]);
+        bfmatch.add(ptdef.descriptors[i]);
+    }
+}
+
+void pose_detection::set_volume_points()
+{
+    //initialize from some user defined points
+    std::cout<<"NOTE: letting the pose detection set_volume_points function auto-initialize is really just for testing!"<<std::endl;
+    ptdef.volume_points.push_back( {cv::Point3f(0.0,-118.0,-120.0),cv::Point3f(4.0,-130.0,-85.0),cv::Point3f(-25.0,-95.0,-50.0),cv::Point3f(30.0,-95.0,-50.0),cv::Point3f(-70.0,-5.0,-70.0),cv::Point3f(-70,0.0,-75.0)}); //points in the volume in mm
+    ptdef.key_points.push_back( {cv::KeyPoint(1,1,4),cv::KeyPoint(2,4,4),cv::KeyPoint(5,10,4),cv::KeyPoint(12,14,4),cv::KeyPoint(7,19,4),cv::KeyPoint(20,22,4)});
+    ptdef.descriptors.push_back(cv::Mat::zeros(6, 128, CV_64F));
+    //no idea what to do here for keypoints or the matrix!
+    for (int i=0; i<ptdef.descriptors.size(); i++) {
+        bfmatch.add(ptdef.descriptors[i]);
+    }
+
+}
+
+void pose_detection::detect_keypoints_knn()
+{
+    image_points.clear(); //clear it for the new batch of matches
+    volume_points.clear(); //clear it for the new batch of matches
+    
+    std::vector<std::vector<cv::DMatch>> tmpmatch;
+    std::vector<cv::KeyPoint> tmpkp; //key points found by surf
+    //cv::Mat tmpdesc;
+    surfdet(frame,cv::Mat::ones(frame.size(),CV_8U),tmpkp,desc); //detect points in current image and calculates the descriptors
+    bfmatch.knnMatch(desc, tmpmatch, nmatches); //match points to previous images (we added the training set previously!)
+    
+    //clean the matches
+    for (int i=0; i<tmpmatch.size(); i++){
+        if (tmpmatch[i][0].distance<0.7*tmpmatch[i][1].distance) { //if it's good according to Lowe's ratio test
+            surfmatch.push_back(tmpmatch[i][0]); //keep the matches
+            kp.push_back(tmpkp[tmpmatch[i][0].queryIdx]); //keep the keypoints used
+            image_points.push_back(kp.end()->pt); //add the image point
+            volume_points.push_back(ptdef.volume_points[tmpmatch[i][0].imgIdx][tmpmatch[i][0].trainIdx]); //add the volume point
+        }
+    }
+
+
+}
+
+
+
 
 visualize::visualize(string name_in)
 {
@@ -544,6 +613,17 @@ int main(int argc, char* argv[])
     cam.set_rvec(); //set the rvec automatically from a guess
     cam.set_tvec(); //set the tvec from a guess
      */
+    
+    //instantiate the pose_detection class
+    pose_detection pose;
+    cap.read(frame);
+    pose.set_frame(frame);
+    pose.set_cameraMatrix(); //set the camera matrix from the focal length and sensor size
+    pose.set_rvec(); //set the rvec automatically from a guess
+    pose.set_tvec(); //set the tvec from a guess
+    pose.set_volume_points(); //ONLY FOR TESTING
+    pose.detect_keypoints_knn(); //
+    pose.find_pose();
     
     
     visualize window("frame"); //instantiate the visualizer class
@@ -1270,7 +1350,7 @@ int main(int argc, char* argv[])
 //    //    surfmatch.push_back(std::vector<cv::DMatch>());
 //    //    bfmatch.match(desc[desc.size()-1], desc.back(), surfmatch.back()); //match points to previous image
 //    //}
-//    
+//
 //    
 //}
 //
