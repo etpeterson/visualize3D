@@ -347,7 +347,7 @@ public:
 };
 
 
-class calculate_2D_3D_correspondence: private pose_detection, private camera{
+class calculate_2D_3D_correspondence: private pose_detection{ //private camera
 protected:
     std::vector< std::vector<cv::Point2f> > image_points_cal; //must be floats otherwise we get strange issues from
     std::vector< std::vector<cv::Point3f> > volume_points_cal; //all the court verticies in actual locations (filled in camera_calibration)
@@ -485,8 +485,9 @@ void pose_detection::set_volume_points(const point_definitions ptdef_in)
     ptdef.key_points=ptdef_in.key_points;
     for (int i=0; i<ptdef_in.descriptors.size(); i++) {
         ptdef_in.descriptors[i].copyTo(ptdef.descriptors[i]);
-        bfmatch.add(ptdef.descriptors[i]);
+        //bfmatch.add(ptdef.descriptors[i]);
     }
+    bfmatch.add(ptdef.descriptors); //you add a whole vector at a time!
 }
 
 void pose_detection::set_volume_points()
@@ -497,9 +498,8 @@ void pose_detection::set_volume_points()
     ptdef.key_points.push_back( {cv::KeyPoint(1,1,4),cv::KeyPoint(2,4,4),cv::KeyPoint(5,10,4),cv::KeyPoint(12,14,4),cv::KeyPoint(7,19,4),cv::KeyPoint(20,22,4)});
     ptdef.descriptors.push_back(cv::Mat::zeros(6, 128, CV_64F));
     //no idea what to do here for keypoints or the matrix!
-    for (int i=0; i<ptdef.descriptors.size(); i++) {
-        bfmatch.add(ptdef.descriptors[i]);
-    }
+    bfmatch.add(ptdef.descriptors);
+
 
 }
 
@@ -527,6 +527,185 @@ void pose_detection::detect_keypoints_knn()
 
 }
 
+
+void calculate_2D_3D_correspondence::match_keypoints(const Mesh &head) //filter the image keypoints and match them to the object
+{
+
+
+}
+
+cv::Point3f get_nearest_3D_point(std::vector<cv::Point3f> &points_list, cv::Point3f origin)
+{
+    double d=std::numeric_limits<double>::max(),dt;
+    cv::Point3f p_final;
+    for (int i=0; i<points_list.size(); i++) {
+        //dt=std::sqrt( std::pow(points_list[i].x-origin.x, 2) + std::pow(points_list[i].y-origin.y, 2) + std::pow(points_list[i].z-origin.z, 2) );
+        dt=std::pow(points_list[i].x-origin.x, 2) + std::pow(points_list[i].y-origin.y, 2) + std::pow(points_list[i].z-origin.z, 2);  //external sqrt was uneccessary to find min distance
+        if (dt<d) {
+            d=dt;
+            p_final=points_list[i];
+        }
+    }
+    return p_final;
+}
+
+/* Functions for Möller–Trumbore intersection algorithm */
+
+cv::Point3f CROSS(cv::Point3f v1, cv::Point3f v2)
+{
+    cv::Point3f tmp_p;
+    tmp_p.x =  v1.y*v2.z - v1.z*v2.y;
+    tmp_p.y =  v1.z*v2.x - v1.x*v2.z;
+    tmp_p.z =  v1.x*v2.y - v1.y*v2.x;
+    return tmp_p;
+}
+
+double DOT(cv::Point3f v1, cv::Point3f v2)
+{
+    return v1.x*v2.x + v1.y*v2.y + v1.z*v2.z;
+}
+
+cv::Point3f SUB(cv::Point3f v1, cv::Point3f v2)
+{
+    cv::Point3f tmp_p;
+    tmp_p.x =  v1.x - v2.x;
+    tmp_p.y =  v1.y - v2.y;
+    tmp_p.z =  v1.z - v2.z;
+    return tmp_p;
+}
+
+/* End functions for Möller–Trumbore intersection algorithm */
+
+bool calculate_2D_3D_correspondence::backproject2DPoint(const Mesh *mesh, const cv::Point2f &point2d, cv::Point3f &point3d,cv::Mat *rmat, cv::Mat *tmat) //find if a point on the displayed image intersects the mesh at any point
+{
+    //bool vis3D::backproject2DPoint(const Mesh *mesh, const cv::Point2f &point2d, cv::Point3f &point3d,cv::Mat *tmat_loc, cv::Mat *rmat_loc)
+        // Triangles list of the object mesh
+        std::vector<std::vector<int> > triangles_list = mesh->getTrianglesList();
+
+        double lambda = 8;
+        double u = point2d.x;
+        double v = point2d.y;
+
+        // Point in vector form
+        cv::Mat point2d_vec = cv::Mat::ones(3, 1, CV_64F); // 3x1
+        point2d_vec.at<double>(0) = u * lambda;
+        point2d_vec.at<double>(1) = v * lambda;
+        point2d_vec.at<double>(2) = lambda;
+
+        // Point in camera coordinates
+        cv::Mat X_c = cameraMatrix.inv() * point2d_vec ; // 3x1
+
+        // Point in world coordinates
+        cv::Mat X_w = rmat->inv() * ( X_c - *tmat ); // 3x1
+
+        // Center of projection
+        cv::Mat C_op = cv::Mat(rmat->inv()).mul(-1) * *tmat; // 3x1
+
+        // Ray direction vector
+        cv::Mat ray = X_w - C_op; // 3x1
+        ray = ray / cv::norm(ray); // 3x1
+
+        // Set up Ray
+        Ray R((cv::Point3f)C_op, (cv::Point3f)ray);
+
+        // A vector to store the intersections found
+        std::vector<cv::Point3f> intersections_list;
+
+        // Loop for all the triangles and check the intersection
+        for (unsigned int i = 0; i < triangles_list.size(); i++)
+        {
+            cv::Point3f V0 = mesh->getVertex(triangles_list[i][0]);
+            cv::Point3f V1 = mesh->getVertex(triangles_list[i][1]);
+            cv::Point3f V2 = mesh->getVertex(triangles_list[i][2]);
+
+            Triangle T(i, V0, V1, V2);
+
+            double out;
+            if(this->intersect_ray_triangle(R, T, &out))
+            {
+                cv::Point3f tmp_pt = R.getP0() + out*R.getP1(); // P = O + t*D
+                intersections_list.push_back(tmp_pt);
+            }
+        }
+
+        // If there are intersection, find the nearest one
+        if (!intersections_list.empty())
+        {
+            //std::cout<<"found "<<intersections_list.size()<<" interactions!"<<std::endl;
+            point3d = get_nearest_3D_point(intersections_list, R.getP0()); //this only works for 2 points, not many!
+            return true;
+        }
+        else
+        {
+            return false;
+        }
+}
+
+bool calculate_2D_3D_correspondence::intersect_ray_triangle(Ray &Ray, Triangle &Triangle, double *out) //find if the ray interacts the triangle, if so return the position
+{
+        const double EPSILON = 0.000001;
+
+        cv::Point3f e1, e2;
+        cv::Point3f P, Q, T;
+        double det, inv_det, u, v;
+        double t;
+
+        cv::Point3f V1 = Triangle.getV0();  // Triangle vertices
+        cv::Point3f V2 = Triangle.getV1();
+        cv::Point3f V3 = Triangle.getV2();
+
+        cv::Point3f O = Ray.getP0(); // Ray origin
+        cv::Point3f D = Ray.getP1(); // Ray direction
+
+        //Find vectors for two edges sharing V1
+        e1 = SUB(V2, V1);
+        e2 = SUB(V3, V1);
+
+        // Begin calculation determinant - also used to calculate U parameter
+        P = CROSS(D, e2);
+
+        // If determinant is near zero, ray lie in plane of triangle
+        det = DOT(e1, P);
+
+        //NOT CULLING
+        if(det > -EPSILON && det < EPSILON) return false;
+        inv_det = 1.f / det;
+
+        //calculate distance from V1 to ray origin
+        T = SUB(O, V1);
+
+        //Calculate u parameter and test bound
+        u = DOT(T, P) * inv_det;
+
+        //The intersection lies outside of the triangle
+        if(u < 0.f || u > 1.f) return false;
+
+        //Prepare to test v parameter
+        Q = CROSS(T, e1);
+
+        //Calculate V parameter and test bound
+        v = DOT(D, Q) * inv_det;
+
+        //The intersection lies outside of the triangle
+        if(v < 0.f || u + v  > 1.f) return false;
+
+        t = DOT(e2, Q) * inv_det;
+
+        if(t > EPSILON) { //ray intersection
+            *out = t;
+            return true;
+        }
+
+        // No hit, no win
+        return false;
+
+}
+
+void proj_2D_to_3D(const Mesh &head, const int framenum,cv::Mat rmat, cv::Mat tmat) //project 2D points to the 3D surface
+{
+
+
+}
 
 
 
